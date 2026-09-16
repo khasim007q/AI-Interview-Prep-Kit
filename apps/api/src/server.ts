@@ -1,18 +1,37 @@
-import express from "express";
+import { app } from "./app.js";
+import { env } from "./config/env.js";
+import { logger } from "./utils/logger.js";
+import { connectToDatabase, closeDatabase } from "./repositories/db.js";
 
-const app = express();
-const port = process.env.PORT || 4000;
+async function bootstrap() {
+  try {
+    // Attempt database connection
+    await connectToDatabase();
 
-app.use(express.json());
+    const server = app.listen(env.PORT, () => {
+      logger.info(`🚀 API server ready on http://localhost:${env.PORT}`);
+    });
 
-app.get("/api/health", (_req, res) => {
-  res.status(200).json({ status: "ok", timestamp: new Date().toISOString() });
-});
+    // Graceful shutdown handling
+    const shutdown = async (signal: string) => {
+      logger.info(`Received ${signal}. Gracefully shutting down...`);
+      server.close(async () => {
+        await closeDatabase();
+        logger.info("Server closed.");
+        process.exit(0);
+      });
+    };
 
-if (process.env.NODE_ENV !== "test") {
-  app.listen(port, () => {
-    console.log(`API server running on port ${port}`);
-  });
+    process.on("SIGTERM", () => shutdown("SIGTERM"));
+    process.on("SIGINT", () => shutdown("SIGINT"));
+  } catch (error) {
+    logger.error({ error }, "Failed to start API server");
+    process.exit(1);
+  }
+}
+
+if (env.NODE_ENV !== "test") {
+  bootstrap();
 }
 
 export default app;
