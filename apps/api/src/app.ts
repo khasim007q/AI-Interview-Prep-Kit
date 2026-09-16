@@ -4,6 +4,7 @@ import cookieParser from "cookie-parser";
 import { env } from "./config/env.js";
 import { errorMiddleware } from "./middleware/error.middleware.js";
 import { authRouter } from "./routes/auth.routes.js";
+import { kitsRouter } from "./routes/kits.routes.js";
 
 export const app = express();
 
@@ -37,6 +38,7 @@ app.get("/api/health", (_req, res) => {
 
 // Mount Routes
 app.use("/api/auth", authRouter);
+app.use("/api/kits", kitsRouter);
 
 // Global Error Middleware
 app.use(errorMiddleware);

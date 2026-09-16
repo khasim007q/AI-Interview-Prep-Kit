@@ -1,0 +1,8 @@
+[
+  {
+    "id": "case-01",
+    "jd": "Senior Backend Engineer at Acme. Required: 5+ years backend engineering with Node.js and MongoDB. Experience designing distributed systems and high-throughput microservices. Nice to have: Docker, Kubernetes, mentoring junior developers.",
+    "company_url": "https://example.com",
+    "days": 5
+  }
+]
