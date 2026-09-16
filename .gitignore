@@ -33,3 +33,4 @@ coverage/
 .turbo
 .eslintcache
 .cache/
+*.tsbuildinfo
