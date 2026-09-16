@@ -1,0 +1,30 @@
+{
+  "name": "ai-interview-prep-kit",
+  "version": "1.0.0",
+  "private": true,
+  "description": "AI Interview Prep Kit — Full-Stack Autonomous Interview Preparation Platform",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm run dev -w @ai-interview-prep/api\" \"npm run dev -w @ai-interview-prep/web\"",
+    "dev:api": "npm run dev -w @ai-interview-prep/api",
+    "dev:web": "npm run dev -w @ai-interview-prep/web",
+    "build": "npm run build -w @ai-interview-prep/shared && npm run build -w @ai-interview-prep/api && npm run build -w @ai-interview-prep/web",
+    "build:shared": "npm run build -w @ai-interview-prep/shared",
+    "build:api": "npm run build -w @ai-interview-prep/api",
+    "build:web": "npm run build -w @ai-interview-prep/web",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "npm run typecheck -w @ai-interview-prep/shared && npm run typecheck -w @ai-interview-prep/api && npm run typecheck -w @ai-interview-prep/web",
+    "lint": "npm run lint -w @ai-interview-prep/shared && npm run lint -w @ai-interview-prep/api && npm run lint -w @ai-interview-prep/web",
+    "evaluate": "tsx apps/api/src/cli/evaluate.ts"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "tsx": "^4.19.3",
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.7"
+  }
+}
