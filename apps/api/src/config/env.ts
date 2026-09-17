@@ -1,7 +1,11 @@
 import dotenv from "dotenv";
+import path from "node:path";
 import { z } from "zod";
 
+// Load .env from current directory, then check parent/root directory
 dotenv.config();
+dotenv.config({ path: path.resolve(process.cwd(), ".env") });
+dotenv.config({ path: path.resolve(process.cwd(), "../../.env") });
 
 const EnvSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
