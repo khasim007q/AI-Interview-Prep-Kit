@@ -12,6 +12,15 @@ async function bootstrap() {
       logger.info(`🚀 API server ready on http://localhost:${env.PORT}`);
     });
 
+    server.on("error", (err: NodeJS.ErrnoException) => {
+      if (err.code === "EADDRINUSE") {
+        logger.error(`Port ${env.PORT} is already in use. Please free port ${env.PORT} or set PORT in .env.`);
+      } else {
+        logger.error({ err }, "Server encountered an error");
+      }
+      process.exit(1);
+    });
+
     // Graceful shutdown handling
     const shutdown = async (signal: string) => {
       logger.info(`Received ${signal}. Gracefully shutting down...`);
