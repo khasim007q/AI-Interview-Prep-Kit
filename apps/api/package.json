@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "tsx watch src/server.ts",
+    "prebuild": "npm run build:shared --prefix ../.. || true",
     "build": "tsc",
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit",

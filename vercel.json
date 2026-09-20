@@ -1,0 +1,6 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "nextjs",
+  "buildCommand": "npm run build:shared && npm run build -w @ai-interview-prep/web",
+  "outputDirectory": "apps/web/.next"
+}

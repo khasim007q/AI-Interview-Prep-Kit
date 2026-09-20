@@ -6,6 +6,14 @@ import { env } from "../config/env.js";
 const COOKIE_NAME = "session_token";
 const COOKIE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
+const isProd = env.NODE_ENV === "production";
+const cookieOptions = {
+  httpOnly: true,
+  secure: isProd,
+  sameSite: (isProd ? "none" : "lax") as "none" | "lax",
+  path: "/",
+};
+
 export class AuthController {
   async register(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
@@ -13,10 +21,7 @@ export class AuthController {
       const { user, token } = await authService.register(input.email, input.password);
 
       res.cookie(COOKIE_NAME, token, {
-        httpOnly: true,
-        secure: env.NODE_ENV === "production",
-        sameSite: "lax",
-        path: "/",
+        ...cookieOptions,
         maxAge: COOKIE_MAX_AGE_MS,
       });
 
@@ -32,10 +37,7 @@ export class AuthController {
       const { user, token } = await authService.login(input.email, input.password);
 
       res.cookie(COOKIE_NAME, token, {
-        httpOnly: true,
-        secure: env.NODE_ENV === "production",
-        sameSite: "lax",
-        path: "/",
+        ...cookieOptions,
         maxAge: COOKIE_MAX_AGE_MS,
       });
 
@@ -52,12 +54,7 @@ export class AuthController {
         await authService.logout(token);
       }
 
-      res.clearCookie(COOKIE_NAME, {
-        httpOnly: true,
-        secure: env.NODE_ENV === "production",
-        sameSite: "lax",
-        path: "/",
-      });
+      res.clearCookie(COOKIE_NAME, cookieOptions);
 
       res.status(200).json({ message: "Logged out successfully" });
     } catch (error) {

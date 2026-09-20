@@ -19,7 +19,8 @@
     "test:watch": "vitest",
     "typecheck": "npm run typecheck -w @ai-interview-prep/shared && npm run typecheck -w @ai-interview-prep/api && npm run typecheck -w @ai-interview-prep/web",
     "lint": "npm run lint -w @ai-interview-prep/shared && npm run lint -w @ai-interview-prep/api && npm run lint -w @ai-interview-prep/web",
-    "evaluate": "tsx apps/api/src/cli/evaluate.ts"
+    "evaluate": "tsx apps/api/src/cli/evaluate.ts",
+    "build:vercel": "npm run build:shared && npm run build:web"
   },
   "devDependencies": {
     "concurrently": "^9.1.2",
