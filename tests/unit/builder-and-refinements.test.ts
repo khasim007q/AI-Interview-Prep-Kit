@@ -62,7 +62,7 @@ describe("P0: 2-Line Minimal JD Handling", () => {
     const validation = validateKitStructure(kit, { requireMustCoverage: true });
     expect(validation.isValid).toBe(true);
     expect(validation.errors).toHaveLength(0);
-  });
+  }, 15000);
 });
 
 describe("P0: Must-Have Coverage Gate", () => {

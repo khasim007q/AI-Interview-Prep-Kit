@@ -169,7 +169,7 @@ async function main() {
   console.log(`Reading cases from:  ${resolvedInput}`);
   console.log(`Output destination:  ${resolvedOutput}`);
 
-  let rawFileContent: string;
+  let rawFileContent = "";
   try {
     rawFileContent = await fs.readFile(resolvedInput, "utf-8");
   } catch (err) {
@@ -189,6 +189,7 @@ async function main() {
   if (!validation.success) {
     console.error("Error: Input cases failed schema validation:", validation.error.format());
     process.exit(1);
+    return;
   }
 
   const cases = validation.data;

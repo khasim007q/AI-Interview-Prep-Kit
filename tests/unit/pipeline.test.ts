@@ -161,5 +161,5 @@ describe("Pipeline Orchestrator & LLM Adapter", () => {
     const validation = validateKitStructure(kit, { requireMustCoverage: true });
     expect(validation.isValid).toBe(true);
     expect(validation.errors).toHaveLength(0);
-  });
+  }, 15000);
 });

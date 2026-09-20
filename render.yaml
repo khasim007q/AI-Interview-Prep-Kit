@@ -5,7 +5,7 @@ services:
     plan: free
     region: oregon
     rootDir: .
-    buildCommand: npm install && npm run build:shared && npm run build -w @ai-interview-prep/api
+    buildCommand: npm install --include=dev && npm run build:shared && npm run build -w @ai-interview-prep/api
     startCommand: npm run start -w @ai-interview-prep/api
     healthCheckPath: /health
     autoDeploy: true
