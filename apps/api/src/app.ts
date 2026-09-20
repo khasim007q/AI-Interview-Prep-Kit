@@ -45,6 +45,14 @@ app.use(
 app.use(express.json({ limit: "5mb" }));
 app.use(cookieParser());
 
+// Collapse consecutive slashes in request paths (e.g. //auth/login -> /auth/login)
+app.use((req, _res, next) => {
+  if (req.url.includes("//")) {
+    req.url = req.url.replace(/\/+/g, "/");
+  }
+  next();
+});
+
 // Request ID header
 app.use((req, res, next) => {
   const reqId = req.headers["x-request-id"] || Math.random().toString(36).substring(2, 10);
@@ -53,9 +61,20 @@ app.use((req, res, next) => {
 });
 
 // Health check endpoints (compatible with Render, Railway, Vercel monitoring)
-const healthHandler = (_req: express.Request, res: express.Response) => {
-  res.status(200).json({
-    status: "ok",
+const healthHandler = async (_req: express.Request, res: express.Response) => {
+  let dbStatus = "disconnected";
+  try {
+    const { getDatabase } = await import("./repositories/db.js");
+    const database = getDatabase();
+    await database.command({ ping: 1 });
+    dbStatus = "connected";
+  } catch (err) {
+    dbStatus = `disconnected (${(err as Error).message})`;
+  }
+
+  res.status(dbStatus === "connected" ? 200 : 503).json({
+    status: dbStatus === "connected" ? "ok" : "degraded",
+    database: dbStatus,
     env: env.NODE_ENV,
     timestamp: new Date().toISOString(),
   });
@@ -63,9 +82,11 @@ const healthHandler = (_req: express.Request, res: express.Response) => {
 app.get("/health", healthHandler);
 app.get("/api/health", healthHandler);
 
-// Mount Routes
+// Mount Routes (support both /api/* and root /* for reverse proxies and clients)
 app.use("/api/auth", authRouter);
+app.use("/auth", authRouter);
 app.use("/api/kits", kitsRouter);
+app.use("/kits", kitsRouter);
 
 // Global Error Middleware
 app.use(errorMiddleware);

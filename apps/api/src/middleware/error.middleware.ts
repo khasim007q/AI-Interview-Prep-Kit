@@ -60,7 +60,7 @@ export function errorMiddleware(
   res.status(500).json({
     error: {
       code: "INTERNAL_ERROR",
-      message: "An unexpected error occurred. Please try again later.",
+      message: (err as Error).message || "An unexpected error occurred. Please try again later.",
     },
   });
 }

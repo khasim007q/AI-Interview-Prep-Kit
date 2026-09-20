@@ -1,4 +1,10 @@
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api";
+function getBaseUrl(): string {
+  const raw = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api";
+  const trimmed = raw.trim().replace(/\/+$/, "");
+  return trimmed.endsWith("/api") ? trimmed : `${trimmed}/api`;
+}
+
+const API_BASE_URL = getBaseUrl();
 
 export interface ApiErrorResponse {
   error: {
@@ -24,7 +30,8 @@ export async function apiClient<T>(
   endpoint: string,
   options: RequestInit = {}
 ): Promise<T> {
-  const url = `${API_BASE_URL}${endpoint.startsWith("/") ? endpoint : `/${endpoint}`}`;
+  const cleanEndpoint = endpoint.startsWith("/") ? endpoint : `/${endpoint}`;
+  const url = `${API_BASE_URL}${cleanEndpoint}`;
 
   const defaultHeaders: HeadersInit = {
     "Content-Type": "application/json",
