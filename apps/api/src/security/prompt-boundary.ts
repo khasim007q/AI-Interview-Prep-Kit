@@ -4,8 +4,10 @@
  * Essential defense against prompt injection from scraped web pages and user-submitted job descriptions.
  */
 export function wrapUntrustedData(label: string, content: string): string {
-  // Sanitize any attempt to close the XML-like delimiter
-  const sanitized = content.replace(new RegExp(`</${label}>`, "gi"), `[escaped_tag]`);
+  // Sanitize any attempt to close the XML-like delimiter or outer envelope
+  const sanitized = content
+    .replace(new RegExp(`</?${label}>`, "gi"), `[escaped_tag]`)
+    .replace(new RegExp(`</?UNTRUSTED_${label}>`, "gi"), `[escaped_tag]`);
 
   return `
 <UNTRUSTED_${label.toUpperCase()}>

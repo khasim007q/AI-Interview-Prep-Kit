@@ -186,6 +186,60 @@ describe("Deterministic Schedule Allocator", () => {
     }
   });
 
+  it("should handle 2-day schedule with non-zero integer minutes and all days populated", () => {
+    const schedule = allocateSchedule(2, questions, reqs);
+    expect(schedule.days_available).toBe(2);
+    expect(schedule.days).toHaveLength(2);
+    expect(schedule.days[0].day).toBe(1);
+    expect(schedule.days[1].day).toBe(2);
+    expect(Number.isInteger(schedule.days[0].minutes)).toBe(true);
+    expect(Number.isInteger(schedule.days[1].minutes)).toBe(true);
+    expect(schedule.days[0].minutes).toBeGreaterThan(0);
+    expect(schedule.days[1].minutes).toBeGreaterThan(0);
+    const allAllocated = schedule.days.flatMap((d) => d.question_ids);
+    expect(allAllocated).toContain("q1");
+    expect(allAllocated).toContain("q2");
+    expect(allAllocated).toContain("q3");
+  });
+
+  it("should handle few questions across many days without errors or gaps", () => {
+    const twoQuestions: Question[] = [questions[0], questions[1]];
+    const schedule = allocateSchedule(7, twoQuestions, reqs);
+    expect(schedule.days_available).toBe(7);
+    expect(schedule.days).toHaveLength(7);
+    for (let i = 0; i < 7; i++) {
+      expect(schedule.days[i].day).toBe(i + 1);
+      expect(Number.isInteger(schedule.days[i].minutes)).toBe(true);
+      expect(schedule.days[i].minutes).toBeGreaterThanOrEqual(0);
+    }
+    const allAllocated = schedule.days.flatMap((d) => d.question_ids);
+    expect(allAllocated).toContain("q1");
+    expect(allAllocated).toContain("q2");
+  });
+
+  it("should handle many questions across few days without dropping any question", () => {
+    const manyQuestions: Question[] = Array.from({ length: 20 }, (_, i) => ({
+      id: `q_many_${i}`,
+      requirement_ids: ["r1"],
+      category: i % 2 === 0 ? "technical" : "system-design",
+      prompt: `Prompt ${i}`,
+      answer_outline: `Outline ${i}`,
+      difficulty: ((i % 3) + 1) as 1 | 2 | 3,
+    }));
+
+    const schedule = allocateSchedule(2, manyQuestions, reqs);
+    expect(schedule.days_available).toBe(2);
+    expect(schedule.days).toHaveLength(2);
+    expect(Number.isInteger(schedule.days[0].minutes)).toBe(true);
+    expect(Number.isInteger(schedule.days[1].minutes)).toBe(true);
+
+    const allAllocated = schedule.days.flatMap((d) => d.question_ids);
+    expect(allAllocated).toHaveLength(20);
+    for (const q of manyQuestions) {
+      expect(allAllocated).toContain(q.id);
+    }
+  });
+
   it("should handle schedule when questions are empty", () => {
     const schedule = allocateSchedule(3, [], reqs);
     expect(schedule.days_available).toBe(3);

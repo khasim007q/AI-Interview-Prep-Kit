@@ -89,6 +89,42 @@ describe("Research Engine - Link Extractor & Ranker", () => {
     // Top link should be career/job related
     expect(ranked[0].score).toBeGreaterThan(ranked[ranked.length - 1].score);
   });
+
+  it("should rank and discover non-standard hiring links like /work-with-us and /join-us", () => {
+    const customHtml = `
+      <html>
+        <body>
+          <a href="/work-with-us">Work With Us</a>
+          <a href="/join-us">Join Our Team</a>
+          <a href="/terms">Terms of Service</a>
+        </body>
+      </html>
+    `;
+    const links = extractInternalLinks(customHtml, "https://startup.io");
+    const ranked = rankLinks(links);
+
+    const workLink = ranked.find((l) => l.url.includes("work-with-us"));
+    const joinLink = ranked.find((l) => l.url.includes("join-us"));
+    const termsLink = ranked.find((l) => l.url.includes("terms"));
+
+    expect(workLink).toBeDefined();
+    expect(joinLink).toBeDefined();
+    expect(workLink!.score).toBeGreaterThan(0);
+    expect(joinLink!.score).toBeGreaterThan(0);
+    expect(termsLink!.score).toBeLessThan(0);
+  });
+});
+
+describe("Research Engine - Source Type Classifier", () => {
+  it("should accurately classify hiring, engineering, and generic company pages", async () => {
+    const { classifySourceType } = await import("../../apps/api/src/research/crawler.js");
+
+    expect(classifySourceType("https://example.com/careers", "Careers at Acme")).toBe("hiring");
+    expect(classifySourceType("https://example.com/work-with-us", "Join Our Team")).toBe("hiring");
+    expect(classifySourceType("https://example.com/openings", "Current Positions")).toBe("hiring");
+    expect(classifySourceType("https://example.com/tech-blog", "Engineering Architecture")).toBe("engineering");
+    expect(classifySourceType("https://example.com/about", "About Us")).toBe("company");
+  });
 });
 
 describe("Research Engine - Public Discussion Search", () => {

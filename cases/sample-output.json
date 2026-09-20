@@ -1,0 +1,385 @@
+{
+  "version": "1.0",
+  "generated_at": "2026-09-20T07:46:42.578Z",
+  "kits": [
+    {
+      "id": "case-01",
+      "status": "ok",
+      "kit": {
+        "source": {
+          "company": "Example Domain",
+          "company_url": "https://example.com/",
+          "role": "Senior Backend Engineer",
+          "location": "",
+          "jd_chars": 236,
+          "researched_at": "2026-09-20T07:46:42.577Z",
+          "pages_used": [
+            "https://example.com/"
+          ]
+        },
+        "company_brief": {
+          "summary": "Example Domain (example.com) is a reserved domain maintained for use as an illustrative example in technical and software documentation without requiring prior permission. The provided site documentation explicitly notes that it should be avoided for actual operations. As a placeholder entity rather than a traditional company or employer, there is no public information regarding company size, scale, mission, or workforce.\n\nBecause Example Domain is not a commercial enterprise or hiring organization, public sources do not contain details regarding an engineering culture, hiring philosophy, or structured interview process. References to 'example domain' across external technical discussion forums occur strictly as standard English phrasing in generic interview context (e.g., domain-specific questions or example domains for system design) rather than feedback on interviewing with this site.",
+          "what_they_do": "Example Domain provides a standard, reserved web domain intended strictly for illustrative use in documentation, tutorials, and testing. It does not sell products, operate a commercial business model, or utilize proprietary tech stack offerings beyond serving a static placeholder page.",
+          "sources": [
+            "https://example.com/"
+          ]
+        },
+        "role": {
+          "title": "Senior Backend Engineer",
+          "seniority": "Senior",
+          "responsibilities": [],
+          "requirements": [
+            {
+              "id": "r1",
+              "text": "5+ years backend engineering with Node.js and MongoDB",
+              "kind": "technical",
+              "priority": "must"
+            },
+            {
+              "id": "r2",
+              "text": "Experience designing distributed systems and high-throughput microservices",
+              "kind": "technical",
+              "priority": "must"
+            },
+            {
+              "id": "r3",
+              "text": "Docker",
+              "kind": "technical",
+              "priority": "nice"
+            },
+            {
+              "id": "r4",
+              "text": "Kubernetes",
+              "kind": "technical",
+              "priority": "nice"
+            },
+            {
+              "id": "r5",
+              "text": "Mentoring junior developers",
+              "kind": "behavioural",
+              "priority": "nice"
+            }
+          ]
+        },
+        "questions": [
+          {
+            "id": "q1",
+            "requirement_ids": [
+              "r1",
+              "r2"
+            ],
+            "category": "technical",
+            "prompt": "In a high-throughput Node.js microservice architecture backed by MongoDB handling tens of thousands of write requests per second, how do you address Node.js event loop blockage and MongoDB write bottlenecks? Walk me through your approach to connection pooling, backpressure handling, and schema/sharding strategy.",
+            "answer_outline": "1. **Node.js Event Loop Management**: Avoid blocking CPU operations by offloading serialization/crypto work to worker threads or native C++ add-ons. Leverage Node.js streams and asynchronous iteration for memory-efficient payload handling.\n2. **MongoDB Connection Pooling & Tuning**: Tune driver parameters such as `maxPoolSize` and `minPoolSize` based on core count and workload. Implement socket timeout configurations and handle pool exhaustions gracefully with circuit breakers or local task queues.\n3. **Write Bottleneck Strategies**: Utilize unordered bulk writes (`bulkWrite`) to reduce network roundtrips. Choose appropriate write concerns (`w: 1` vs `w: majority`) based on consistency vs latency trade-offs. Design shard keys with high cardinality and even distribution to avoid hot shards.\n4. **Backpressure & Queueing**: Ingest high-volume spikes into an intermediate buffer (e.g., Kafka or Redis Streams) to decouple incoming HTTP traffic from DB persistence and apply rate limiting when queues reach threshold capacity.",
+            "difficulty": 3
+          },
+          {
+            "id": "q2",
+            "requirement_ids": [
+              "r1",
+              "r2",
+              "r3",
+              "r4"
+            ],
+            "category": "technical",
+            "prompt": "When deploying a high-throughput Node.js microservice to a Kubernetes cluster via Docker, how do you handle process lifecycle events to ensure zero-downtime deployments and prevent dropped connections? Specifically address signal handling, probe configuration, and memory limit alignment.",
+            "answer_outline": "1. **Docker PID 1 & Signal Handling**: Address Node.js running as PID 1 not handling kernel signals properly by using process supervisors like `tini` or `dumb-init` in the Dockerfile so `SIGTERM` signals propagate instantly.\n2. **Graceful Shutdown Sequence**: Intercept `SIGTERM` in Node.js to stop accepting new connections (`server.close()`), complete ongoing requests within a specified shutdown timeout window, and gracefully close MongoDB driver connection pools.\n3. **Kubernetes Probes & Lifecycle**: Configure `readinessProbe` to fail immediately upon `SIGTERM` so kube-proxy removes the Pod from endpoint routing. Use `preStop` hooks if necessary to accommodate network propagation delay before tearing down the container.\n4. **V8 Memory Management vs. K8s Limits**: Align Node.js `--max-old-space-size` flag with Kubernetes pod `memory.limits` (e.g., setting V8 max heap to ~75-80% of container limit) to prevent abrupt process termination by the Linux OOM killer.",
+            "difficulty": 2
+          },
+          {
+            "id": "q3",
+            "requirement_ids": [
+              "r1",
+              "r2"
+            ],
+            "category": "technical",
+            "prompt": "In a distributed microservices ecosystem, how do you solve the dual-write problem when updating a MongoDB document and publishing a corresponding domain event to an external message broker? Explain how you would implement the Transactional Outbox Pattern using MongoDB Change Streams.",
+            "answer_outline": "1. **Dual-Write Problem Analysis**: Explain how writing to MongoDB and publishing to a broker sequentially without atomicity causes inconsistent state across services if the process crashes mid-operation.\n2. **Transactional Outbox Pattern**: Execute business data updates and event persistence within a single atomic MongoDB multi-document transaction (writing the event to a dedicated `outbox` collection).\n3. **MongoDB Change Streams & Publisher**: Build a background worker service that listens to the MongoDB Change Stream on the `outbox` collection, guaranteeing ordered CDC (Change Data Capture) event retrieval and publishing to Kafka/RabbitMQ.\n4. **Idempotency & Resilience**: Ensure consumer services implement idempotency keys (e.g., tracking message UUIDs in target database) to handle at-least-once delivery guarantees from event brokers safely.",
+            "difficulty": 3
+          },
+          {
+            "id": "q4",
+            "requirement_ids": [
+              "r1",
+              "r2"
+            ],
+            "category": "system-design",
+            "prompt": "Design a high-throughput event ingestion platform capable of processing 100,000 write events per second using Node.js and MongoDB. Walk me through the microservice architecture, API layer non-blocking IO management, MongoDB sharding strategy, and write concern configurations to prevent bottlenecking the Node.js event loop while ensuring data durability.",
+            "answer_outline": "1. Ingestion Layer: Use Node.js Fastify/Express with non-blocking stream handling to prevent CPU-bound JSON parsing from blocking the main thread; decouple incoming HTTP requests from database writes using an asynchronous distributed log (e.g., Apache Kafka or RabbitMQ).\n2. Ingestion Batching: Implement micro-batching in Node.js consumer microservices using `insertMany()` with `{ ordered: false }` to maximize database write throughput.\n3. MongoDB Data Modeling & Sharding: Select a compound shard key (e.g., `{ tenant_id: 1, hashed_event_id: 1 }` or time-bucketed) to ensure even chunk distribution across shards and avoid write hotspots on monotonic keys.\n4. Write Concern & Durability Trade-offs: Tune MongoDB write concerns—using `{ w: 1, j: false }` at high volume with background journal flushes, or `{ w: 'majority' }` on critical async worker pools. Utilize MongoDB Change Streams for downstream microservice triggers.\n5. Backpressure & Failure Handling: Implement circuit breakers, backpressure controls using Node.js streams/queues, and Dead Letter Queues (DLQ) to handle downstream database degradation or cluster failovers gracefully.",
+            "difficulty": 3
+          },
+          {
+            "id": "q5",
+            "requirement_ids": [
+              "r2",
+              "r3",
+              "r4"
+            ],
+            "category": "system-design",
+            "prompt": "How would you design and deploy a stateless Node.js microservice architecture on Kubernetes using Docker that automatically scales to handle unpredictable traffic spikes without dropping incoming requests? Cover container optimization, pod autoscaling strategies, health checks, and graceful shutdown handling.",
+            "answer_outline": "1. Container Optimization: Build multi-stage Dockerfiles utilizing minimal base images (e.g., Distroless or Alpine), setting node environment to production, non-root execution, and explicitly setting Node.js V8 memory flags (`--max-old-space-size`) aligned with Kubernetes pod memory limits.\n2. Kubernetes Deployment Strategy: Configure Readiness and Liveness probes pointing to dedicated endpoints (`/healthz/ready` verifying DB connections, `/healthz/live` checking event loop lag). Implement RollingUpdate with optimized `maxSurge` and `maxUnavailable` parameters.\n3. Pod Autoscaling: Configure Horizontal Pod Autoscaler (HPA) using custom Prometheus metrics (such as Node.js event loop delay and active HTTP connection count) alongside standard CPU/memory metrics.\n4. Graceful Shutdown & Request Retention: Intercept `SIGTERM` signals in the Node.js application process to halt incoming connection acceptance, drain existing active HTTP requests within `terminationGracePeriodSeconds`, and safely release database pool connections before exiting.",
+            "difficulty": 2
+          },
+          {
+            "id": "q6",
+            "requirement_ids": [
+              "r1",
+              "r2"
+            ],
+            "category": "system-design",
+            "prompt": "Design a low-latency, read-heavy backend service in Node.js backed by MongoDB that serves millions of daily active users. Explain how you would structure database read preferences, distributed caching, cache invalidation, and query/index optimization to achieve sub-20ms p99 read latencies.",
+            "answer_outline": "1. Multi-Tier Caching Architecture: Position a distributed Redis cache layer in front of MongoDB, using an in-memory local cache (e.g., LRU cache inside the Node.js process) for ultra-hot keys. Mitigate cache stampedes using probabilistic early expiration (XFetch) or distributed lock primitives.\n2. MongoDB Read Preference Strategy: Configure MongoDB Replica Set read preferences (`secondaryPreferred` or `nearest`) for non-critical reads to offload primary nodes, accepting eventual consistency where business logic permits.\n3. Indexing & Query Optimization: Create compound indexes adhering to the ESR (Equality, Sort, Range) rule. Build covered queries to return data directly from the index without document lookup overhead.\n4. Node.js Memory Optimization: Execute MongoDB read queries using `.lean()` in Mongoose or native driver options to bypass heavy document object hydration, reducing Node.js heap allocation and Garbage Collection pauses.",
+            "difficulty": 2
+          },
+          {
+            "id": "q7",
+            "requirement_ids": [
+              "r1",
+              "r2"
+            ],
+            "category": "behavioural",
+            "prompt": "Tell me about a time when a high-throughput microservice you owned experienced a critical performance degradation or outage in production under peak load. How did you diagnose the issue within your Node.js application or MongoDB database, and what long-term changes did you implement?",
+            "answer_outline": "1. Situation: Describe a high-load production scenario involving a Node.js microservice backed by MongoDB handling significant throughput.\n2. Task: Explain the immediate need to triage the event loop blocking or database lock contention during a high-traffic period.\n3. Action: Detail the diagnostic methodology (e.g., analyzing Node.js event loop lag, inspecting MongoDB slow query logs/explain plans, checking connection pool exhaustion). Explain immediate mitigations (rate limiting, adding compound indexes, adjusting connection pool sizes) and architectural remediations (introducing caching layers, asynchronous queue processing, or read preference optimizations).\n4. Result: Highlight measurable recovery metrics (e.g., response time drop from 2s to 50ms, uptime restored to 99.99%) and post-mortem improvements to preventing regression.",
+            "difficulty": 2
+          },
+          {
+            "id": "q8",
+            "requirement_ids": [
+              "r5"
+            ],
+            "category": "behavioural",
+            "prompt": "Can you share an example of a time you mentored a junior engineer who was struggling with complex backend concepts or code quality? How did you structure your mentorship to foster their growth without taking over their work?",
+            "answer_outline": "1. Situation: Describe working with a junior developer struggling to grasp distributed microservice concepts (e.g., idempotency, event-driven flow, or asynchronous error handling).\n2. Task: Identify the responsibility to help them build technical competence and confidence while meeting project deadlines.\n3. Action: Outline actionable coaching tactics—such as structured pair programming, using RFC/design doc reviews as learning opportunities, breaking down complex distributed systems concepts into digestable abstractions, providing constructive PR reviews, and encouraging test-driven development.\n4. Result: Quantitative/qualitative outcomes showing the junior developer's growth (e.g., successfully shipping the feature independently, reduced PR review iterations, rising to lead small initiatives).",
+            "difficulty": 2
+          },
+          {
+            "id": "q9",
+            "requirement_ids": [
+              "r1",
+              "r2"
+            ],
+            "category": "behavioural",
+            "prompt": "Describe a situation where you had to lead a major architectural refactoring of a core backend service—such as breaking down a monolith into Node.js microservices or changing a primary data model in MongoDB. How did you navigate technical trade-offs and team disagreement?",
+            "answer_outline": "1. Situation: Outline a system reaching architectural limits (e.g., monolithic bottlenecks, unscalable MongoDB schema, or tight service coupling) requiring a redesign into distributed microservices.\n2. Task: Define the goal of redesigning for high throughput and scalability while balancing ongoing feature delivery and resolving team disagreement on technical direction.\n3. Action: Detail how you evaluated key trade-offs (e.g., eventual consistency vs. transactional integrity, data duplication, API contract versioning), created benchmarking prototypes in Node.js, and facilitated technical RFC reviews to build consensus. Explain the deployment strategy (e.g., Strangler Fig pattern, canary releases, dual-writing).\n4. Result: Discuss the operational outcomes (e.g., lowered latency, independent deployments, improved system resiliency) and lessons learned in technical leadership and risk mitigation.",
+            "difficulty": 3
+          },
+          {
+            "id": "q10",
+            "requirement_ids": [
+              "r1",
+              "r2"
+            ],
+            "category": "company-fit",
+            "prompt": "In a senior backend role, aligning with our technical direction means making deliberate architecture choices under high load. Can you describe a time when you evaluated Node.js and MongoDB for a high-throughput microservice, and how you determined whether this stack was appropriate versus alternative paradigms?",
+            "answer_outline": "The candidate should use the STAR method to describe a specific high-load scenario. Key elements include:\n- **Context & Motivation:** Evaluating workload characteristics (I/O-heavy vs CPU-heavy) for Node.js and data access patterns (document-oriented vs relational) for MongoDB.\n- **Technical Trade-offs:** Node.js event-loop bottlenecks, event-driven non-blocking I/O benefits, MongoDB document sizing, indexing strategies, replica set read/write concerns, and connection pooling under peak concurrency.\n- **Outcome & Engineering Culture Fit:** How technical benchmarks and team expertise informed the decision, justifying why the chosen stack met SLA/throughput requirements or where adjustments were necessary.",
+            "difficulty": 2
+          },
+          {
+            "id": "q11",
+            "requirement_ids": [
+              "r3",
+              "r4",
+              "r5"
+            ],
+            "category": "company-fit",
+            "prompt": "As a Senior Backend Engineer, driving team adoption of standard infrastructure tooling like Docker and Kubernetes requires effective technical leadership. How have you previously mentored junior developers on containerization and cloud-native practices without overwhelming them or slowing down delivery?",
+            "answer_outline": "The candidate should demonstrate leadership, empathy, and engineering mentorship using the STAR approach:\n- **Mentorship Strategy:** Creating modular onboarding paths, standardized local container development setups (e.g., Docker Compose/Tilt), and reusable Kubernetes manifest templates.\n- **Execution:** Conducting structured pair-programming, interactive code reviews, and brown-bag sessions explaining core concepts (container runtimes, pod lifecycles, ingress, resource limits).\n- **Impact:** Measuring success through reduced onboarding time, fewer deployment failures caused by configuration drift, and increased independence of junior engineers in debugging environment issues.",
+            "difficulty": 2
+          },
+          {
+            "id": "q12",
+            "requirement_ids": [
+              "r2",
+              "r4"
+            ],
+            "category": "company-fit",
+            "prompt": "When migrating towards high-throughput microservices deployed on Kubernetes, technical complexity can easily exceed team capacity. Tell me about a situation where you balanced distributed system architectural choices with team readiness and operational complexity.",
+            "answer_outline": "The candidate should share a experience highlighting architectural decision-making and operational alignment:\n- **System Complexity vs Team Capacity:** Evaluating microservices granularity (avoiding nano-services), managing distributed data consistency (e.g., Saga pattern vs eventual consistency), and managing Kubernetes deployment overhead.\n- **Pragmatic Choices:** Introducing service mesh or tracing selectively, establishing clear observability standards (Prometheus/Grafana), and implementing CI/CD pipelines that abstract Kubernetes manifest complexity.\n- **Business/Culture Alignment:** Balancing cutting-edge infrastructure with pragmatic delivery timelines, ensuring the engineering team could effectively own and operate the production services long-term.",
+            "difficulty": 3
+          }
+        ],
+        "flashcards": [
+          {
+            "id": "f1",
+            "front": "How does the Transactional Outbox Pattern solve the dual-write problem in MongoDB microservices?",
+            "back": "• Writes domain entity changes and an outbox event in a single ACID multi-document transaction to MongoDB.\n• A separate background worker reads the MongoDB Change Stream for new outbox documents.\n• The worker publishes events to the external broker and marks outbox items processed, guaranteeing at-least-once delivery.",
+            "requirement_ids": [
+              "r1",
+              "r2"
+            ]
+          },
+          {
+            "id": "f2",
+            "front": "How should you align Node.js V8 memory configuration with Kubernetes container RAM limits?",
+            "back": "• Set `--max-old-space-size` to ~75-80% of the Kubernetes container memory limit.\n• Reserves 20-25% memory for C++ bindings, buffer allocations, V8 overhead, and OS tasks.\n• Prevents the Kubernetes OOMKiller from abruptly killing pods before Node.js can run GC or emit diagnostic logs.",
+            "requirement_ids": [
+              "r1",
+              "r3",
+              "r4"
+            ]
+          },
+          {
+            "id": "f3",
+            "front": "What are the required steps to implement zero-downtime graceful shutdown in Node.js on Kubernetes?",
+            "back": "• Intercept SIGTERM and immediately fail readiness probes so K8s stops routing new traffic.\n• Stop accepting new incoming requests while keeping existing connections alive.\n• Drain active requests, flush buffered writes/logs, close MongoDB driver connections, and exit 0 within `terminationGracePeriodSeconds`.",
+            "requirement_ids": [
+              "r1",
+              "r4"
+            ]
+          },
+          {
+            "id": "f4",
+            "front": "How do you handle Node.js event loop lag and MongoDB bottlenecks during high-throughput write spikes?",
+            "back": "• Apply backpressure upstream via message queues (e.g., Kafka/Redis) or API rate-limiting/throttling.\n• Batch incoming writes in Node.js memory and execute unordered `bulkWrite()` operations to reduce database roundtrips.\n• Adjust connection pool sizes and avoid synchronous/blocking operations on the V8 main thread.",
+            "requirement_ids": [
+              "r1",
+              "r2"
+            ]
+          },
+          {
+            "id": "f5",
+            "front": "How do you select a MongoDB shard key strategy for ultra-high write volume?",
+            "back": "• Use a high-cardinality, evenly distributed key (e.g., hashed shard key or compound `[tenant_id, hashed_id]`).\n• Avoid monotonically increasing keys (like timestamps or sequential IDs) which create write hot-spots on a single shard.\n• Target queries to include the shard key to prevent scatter-gather routing across all mongos routers.",
+            "requirement_ids": [
+              "r1",
+              "r2"
+            ]
+          },
+          {
+            "id": "f6",
+            "front": "How do you optimize MongoDB and Node.js for sub-20ms p99 read latencies in a read-heavy service?",
+            "back": "• Use `secondaryPreferred` or `nearest` read preference with `local` read concern for non-blocking reads.\n• Utilize Redis as a distributed cache-aside layer for hot data keys.\n• Structure compound MongoDB indexes to support covered queries, avoiding disk/document fetches entirely.",
+            "requirement_ids": [
+              "r1",
+              "r2"
+            ]
+          },
+          {
+            "id": "f7",
+            "front": "What is an effective framework for mentoring junior developers on complex backend architecture without taking over?",
+            "back": "• Use Socratic questioning to guide them toward identifying root causes and architectural trade-offs.\n• Practice driver-navigator pair programming where the junior developer writes all code.\n• Deconstruct complex tasks (e.g., containerization) into bite-sized milestones with clear acceptance criteria.",
+            "requirement_ids": [
+              "r5"
+            ]
+          }
+        ],
+        "schedule": {
+          "days_available": 5,
+          "days": [
+            {
+              "day": 1,
+              "focus": "Core Architecture & High-Priority Fundamentals",
+              "question_ids": [
+                "q2",
+                "q9",
+                "q7",
+                "q8"
+              ],
+              "minutes": 65
+            },
+            {
+              "day": 2,
+              "focus": "System Design & Distributed Scalability",
+              "question_ids": [
+                "q4",
+                "q6",
+                "q12"
+              ],
+              "minutes": 55
+            },
+            {
+              "day": 3,
+              "focus": "Company Mission, Values & Culture Alignment",
+              "question_ids": [
+                "q1",
+                "q10",
+                "q11"
+              ],
+              "minutes": 50
+            },
+            {
+              "day": 4,
+              "focus": "Deep Dive Technical Problem Solving",
+              "question_ids": [
+                "q3",
+                "q5"
+              ],
+              "minutes": 35
+            },
+            {
+              "day": 5,
+              "focus": "Final Preparation & Mindset Review",
+              "question_ids": [],
+              "minutes": 30
+            }
+          ]
+        },
+        "coverage": {
+          "uncovered_requirement_ids": [],
+          "passes": 1
+        },
+        "research": {
+          "sources_attempted": [
+            "https://example.com/"
+          ],
+          "sources_used": [
+            "https://example.com/",
+            "https://igotanoffer.com/en/advice/nvidia-software-engineer-interview",
+            "https://www.facebook.com/groups/362362690463884/posts/2419435038089962/",
+            "https://news.ycombinator.com/item?id=29776547",
+            "https://quizlet.com/544878932/it-technical-interview-questions-flash-cards/",
+            "https://www.facebook.com/groups/developerkaki/posts/2768099330202629/",
+            "https://www.youtube.com/watch?v=HPqRUrMusOg"
+          ],
+          "sources_failed": [],
+          "public_discussion": {
+            "found": true,
+            "sources": [
+              "https://igotanoffer.com/en/advice/nvidia-software-engineer-interview",
+              "https://www.facebook.com/groups/362362690463884/posts/2419435038089962/",
+              "https://news.ycombinator.com/item?id=29776547",
+              "https://quizlet.com/544878932/it-technical-interview-questions-flash-cards/",
+              "https://www.facebook.com/groups/developerkaki/posts/2768099330202629/",
+              "https://www.youtube.com/watch?v=HPqRUrMusOg"
+            ]
+          },
+          "hiring_page_found": false,
+          "pages_content": [
+            {
+              "url": "https://example.com/",
+              "title": "Example Domain",
+              "content": "Example Domain\nThis domain is for use in documentation examples without needing permission. Avoid use in operations.\nLearn more"
+            }
+          ],
+          "discussion_content": [
+            {
+              "source": "https://igotanoffer.com/en/advice/nvidia-software-engineer-interview",
+              "snippet": "Here are some common domain-specific questions you can expect: Example domain-specific interview questions asked at NVIDIA. CUDA programming."
+            },
+            {
+              "source": "https://www.facebook.com/groups/362362690463884/posts/2419435038089962/",
+              "snippet": "A common example domain would be social media platforms. For instance, a question like “Design Instagram” would fall into this category. The ..."
+            },
+            {
+              "source": "https://news.ycombinator.com/item?id=29776547",
+              "snippet": "Of the good candidates that even go through an interview process, they do one round of interviews and get snapped up immediately. ... example domain that you have ..."
+            },
+            {
+              "source": "https://quizlet.com/544878932/it-technical-interview-questions-flash-cards/",
+              "snippet": "For example; domain name CosmicNovo.com it's IP address is 130.211.160.109. DNS uses port 53 TCP or UDP. How many queries does DNS perform and which ones ..."
+            },
+            {
+              "source": "https://www.facebook.com/groups/developerkaki/posts/2768099330202629/",
+              "snippet": "Just want to share this fb page or the X profile in the screenshot The interview questions they share always give me food for thought. Haha, whenever ..."
+            },
+            {
+              "source": "https://www.youtube.com/watch?v=HPqRUrMusOg",
+              "snippet": "... Example: \"Domain-Driven Design is used to develop complex sites. It focuses on mapping activities, tasks, events, and data within a domain ..."
+            }
+          ]
+        }
+      },
+      "error": null
+    }
+  ]
+}

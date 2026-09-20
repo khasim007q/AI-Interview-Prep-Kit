@@ -27,7 +27,7 @@ export interface CrawlResult {
 /**
  * Classifies page source type by URL and content signals.
  */
-function classifySourceType(
+export function classifySourceType(
   url: string,
   title: string
 ): "company" | "hiring" | "engineering" | "public-discussion" {
@@ -37,7 +37,11 @@ function classifySourceType(
     combined.includes("job") ||
     combined.includes("hiring") ||
     combined.includes("interview") ||
-    combined.includes("openings")
+    combined.includes("openings") ||
+    combined.includes("work-with-us") ||
+    combined.includes("join-us") ||
+    combined.includes("positions") ||
+    combined.includes("vacancies")
   ) {
     return "hiring";
   }

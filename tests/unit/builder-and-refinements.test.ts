@@ -219,3 +219,43 @@ describe("P0/P1: Schedule Recalculation on Question Mutations", () => {
     expect(allScheduledIds).toContain("q2");
   });
 });
+
+describe("P1: Optimistic Version Concurrency (409 Conflict)", () => {
+  it("should throw a 409 KIT_VERSION_CONFLICT error when version mismatch occurs", async () => {
+    const { kitService } = await import("../../apps/api/src/services/kit.service.js");
+    const { kitRepository } = await import("../../apps/api/src/repositories/kit.repository.js");
+    const { vi } = await import("vitest");
+
+    const validKit: Kit = {
+      source: {
+        company: "Acme",
+        company_url: "https://example.com",
+        role: "Dev",
+        location: "Remote",
+        jd_chars: 100,
+        researched_at: new Date().toISOString(),
+        pages_used: ["https://example.com"],
+      },
+      company_brief: { summary: "S", what_they_do: "W", sources: [] },
+      role: { title: "Dev", seniority: "Mid", responsibilities: [], requirements: [] },
+      questions: [],
+      flashcards: [],
+      schedule: { days_available: 1, days: [{ day: 1, focus: "F", question_ids: [], minutes: 0 }] },
+      coverage: { uncovered_requirement_ids: [], passes: 1 },
+    };
+
+    // Spy on updateWithVersionLock to simulate a concurrent collision returning null
+    const spy = vi.spyOn(kitRepository, "updateWithVersionLock").mockResolvedValue(null);
+
+    try {
+      await expect(
+        kitService.updateKit("kit-123", "user-123", 1, validKit)
+      ).rejects.toMatchObject({
+        statusCode: 409,
+        code: "KIT_VERSION_CONFLICT",
+      });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});

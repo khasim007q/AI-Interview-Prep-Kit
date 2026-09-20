@@ -272,11 +272,14 @@ The platform is designed to deploy cleanly with zero code modifications:
 The repository includes a comprehensive test suite across schemas, deterministic engines, security modules, research crawlers, builder state preservation, and the end-to-end pipeline:
 
 ```bash
-# Run all unit and integration tests (46 / 46 tests passing)
+# Run all unit and integration tests (53 / 53 tests passing)
 npm test
 
 # Run strict TypeScript typechecking (0 errors across shared, api, web)
 npm run typecheck
+
+# Run the Batch Evaluator CLI on sample cases
+npm run evaluate -- --input cases/sample-cases.json --output cases/sample-output.json
 
 # Build all monorepo workspaces for production
 npm run build
@@ -284,8 +287,9 @@ npm run build
 
 ### Verified Test Evidence
 - **Test Files**: 7 passed (`schemas.test.ts`, `deterministic.test.ts`, `security.test.ts`, `research.test.ts`, `pipeline.test.ts`, `builder-and-refinements.test.ts`, `smoke.test.ts`)
-- **Tests**: **46 passed** (0 failed)
+- **Tests**: **53 passed** (0 failed)
 - **TypeScript**: Strict mode enabled across all 3 workspaces, 0 type errors.
+- **Batch Evaluation**: Evaluated sample case with Gemini LLM in 119.6s, validating 100% compliance with Appendix A schemas.
 - **Production Build**: Clean production builds for Next.js App Router, Express API, and shared types.
 
 ---
