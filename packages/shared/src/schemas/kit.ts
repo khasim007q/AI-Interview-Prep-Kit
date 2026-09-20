@@ -15,6 +15,17 @@ export const RequirementSchema = z.object({
 });
 export type Requirement = z.infer<typeof RequirementSchema>;
 
+// Internal Item Metadata for Builder & Regeneration Preservation
+export const ItemMetadataSchema = z.object({
+  origin: z.enum(["generated", "user"]).default("generated"),
+  state: z.enum(["active", "deleted"]).optional().default("active"),
+  pinned: z.boolean().default(false),
+  edited: z.boolean().default(false),
+  editedAt: z.string().optional(),
+  revision: z.number().int().nonnegative().optional().default(0),
+});
+export type ItemMetadata = z.infer<typeof ItemMetadataSchema>;
+
 // Question Schema
 export const QuestionCategorySchema = z.enum([
   "technical",
@@ -33,11 +44,12 @@ export type QuestionDifficulty = z.infer<typeof QuestionDifficultySchema>;
 
 export const QuestionSchema = z.object({
   id: z.string().min(1, "Question ID must not be empty"),
-  requirement_ids: z.array(z.string()).min(1, "Question must reference at least one requirement"),
+  requirement_ids: z.array(z.string()).default([]),
   category: QuestionCategorySchema,
   prompt: z.string().min(1, "Prompt must not be empty"),
   answer_outline: z.string().min(1, "Answer outline must not be empty"),
   difficulty: QuestionDifficultySchema,
+  metadata: ItemMetadataSchema.optional(),
 });
 export type Question = z.infer<typeof QuestionSchema>;
 
@@ -47,6 +59,7 @@ export const FlashcardSchema = z.object({
   front: z.string().min(1, "Flashcard front must not be empty"),
   back: z.string().min(1, "Flashcard back must not be empty"),
   requirement_ids: z.array(z.string()).default([]),
+  metadata: ItemMetadataSchema.optional(),
 });
 export type Flashcard = z.infer<typeof FlashcardSchema>;
 
@@ -89,8 +102,8 @@ export type CompanyBrief = z.infer<typeof CompanyBriefSchema>;
 export const RoleSchema = z.object({
   title: z.string(),
   seniority: z.string(),
-  responsibilities: z.array(z.string()),
-  requirements: z.array(RequirementSchema),
+  responsibilities: z.array(z.string()).default([]),
+  requirements: z.array(RequirementSchema).default([]),
 });
 export type Role = z.infer<typeof RoleSchema>;
 
@@ -101,7 +114,35 @@ export const CoverageSchema = z.object({
 });
 export type Coverage = z.infer<typeof CoverageSchema>;
 
-// Canonical Public Kit Schema
+// Research Failure & Evidence Schema
+export const ResearchSourceFailedSchema = z.object({
+  url: z.string(),
+  reason: z.string(),
+});
+export type ResearchSourceFailed = z.infer<typeof ResearchSourceFailedSchema>;
+
+export const ResearchMetadataSchema = z.object({
+  sources_attempted: z.array(z.string()).default([]),
+  sources_used: z.array(z.string()).default([]),
+  sources_failed: z.array(ResearchSourceFailedSchema).default([]),
+  public_discussion: z.object({
+    found: z.boolean().default(false),
+    sources: z.array(z.string()).default([]),
+  }).default({ found: false, sources: [] }),
+  hiring_page_found: z.boolean().default(false),
+  pages_content: z.array(z.object({
+    url: z.string(),
+    title: z.string().default(""),
+    content: z.string(),
+  })).default([]),
+  discussion_content: z.array(z.object({
+    source: z.string(),
+    snippet: z.string(),
+  })).default([]),
+});
+export type ResearchMetadata = z.infer<typeof ResearchMetadataSchema>;
+
+// Canonical Public Kit Schema (Appendix A compliant with optional research & metadata extensions)
 export const KitSchema = z.object({
   source: SourceSchema,
   company_brief: CompanyBriefSchema,
@@ -110,24 +151,13 @@ export const KitSchema = z.object({
   flashcards: z.array(FlashcardSchema),
   schedule: ScheduleSchema,
   coverage: CoverageSchema,
+  research: ResearchMetadataSchema.optional(),
 });
 export type Kit = z.infer<typeof KitSchema>;
 
-// Internal Item Metadata for Builder & Regeneration
-export const ItemMetadataSchema = z.object({
-  origin: z.enum(["generated", "user"]).default("generated"),
-  state: z.enum(["active", "deleted"]).default("active"),
-  pinned: z.boolean().default(false),
-  revision: z.number().int().nonnegative().default(0),
-});
-export type ItemMetadata = z.infer<typeof ItemMetadataSchema>;
+// Backward compatibility alias
+export const QuestionWithMetadataSchema = QuestionSchema;
+export type QuestionWithMetadata = Question;
 
-export const QuestionWithMetadataSchema = QuestionSchema.extend({
-  metadata: ItemMetadataSchema.optional(),
-});
-export type QuestionWithMetadata = z.infer<typeof QuestionWithMetadataSchema>;
-
-export const FlashcardWithMetadataSchema = FlashcardSchema.extend({
-  metadata: ItemMetadataSchema.optional(),
-});
-export type FlashcardWithMetadata = z.infer<typeof FlashcardWithMetadataSchema>;
+export const FlashcardWithMetadataSchema = FlashcardSchema;
+export type FlashcardWithMetadata = Flashcard;

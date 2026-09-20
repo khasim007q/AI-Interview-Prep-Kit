@@ -62,6 +62,7 @@ async function ensureIndexes(database: Db): Promise<void> {
     const kits = database.collection("kits");
     await kits.createIndex({ userId: 1, updatedAt: -1 });
     await kits.createIndex({ userId: 1, inputHash: 1 });
+    await kits.createIndex({ userId: 1, inputHash: 1, status: 1 });
 
     // Practice attempts collection
     const attempts = database.collection("practice_attempts");

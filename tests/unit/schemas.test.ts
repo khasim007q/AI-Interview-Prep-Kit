@@ -142,8 +142,8 @@ describe("KitSchema Validation", () => {
     expect(result.success).toBe(false);
   });
 
-  it("should reject question with empty requirement_ids", () => {
-    const invalid = {
+  it("should allow question with empty requirement_ids for minimal JDs with 0 requirements", () => {
+    const validMinimal = {
       id: "q1",
       requirement_ids: [],
       category: "technical",
@@ -151,8 +151,8 @@ describe("KitSchema Validation", () => {
       answer_outline: "Some outline",
       difficulty: 2,
     };
-    const result = QuestionSchema.safeParse(invalid);
-    expect(result.success).toBe(false);
+    const result = QuestionSchema.safeParse(validMinimal);
+    expect(result.success).toBe(true);
   });
 
   it("should reject schedule with non-integer minutes", () => {

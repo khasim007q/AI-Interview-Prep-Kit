@@ -18,6 +18,7 @@ import {
 } from "../ai/prompts/generate-questions.prompt.js";
 import { AppError } from "../middleware/error.middleware.js";
 import { logger } from "../utils/logger.js";
+import type { SearchResultItem } from "../research/search-provider.js";
 import type {
   Kit,
   Question,
@@ -29,6 +30,7 @@ import type {
 export class KitService {
   /**
    * Creates a kit generation record and triggers async processing.
+   * Prevents duplicate in-flight jobs and returns existing completed kits.
    */
   async createKitJob(
     userId: string,
@@ -41,11 +43,17 @@ export class KitService {
 
     const inputHash = sha256(`${normalizedJd.text}::${normalizedUrl}::${safeDays}`);
 
-    // Check duplicate submission
-    const existing = await kitRepository.findExistingCompleted(userId, inputHash);
-    if (existing && existing.kit) {
-      logger.info({ kitId: existing._id }, "Returning existing completed kit for identical input");
-      return existing;
+    // Check duplicate or in-flight submission
+    const existing = await kitRepository.findActiveOrCompleted(userId, inputHash);
+    if (existing) {
+      if (existing.status === "completed" && existing.kit) {
+        logger.info({ kitId: existing._id }, "Returning existing completed kit for identical input");
+        return existing;
+      }
+      if (existing.status === "running" || existing.status === "queued") {
+        logger.info({ kitId: existing._id }, "Returning in-flight kit generation job for identical input");
+        return existing;
+      }
     }
 
     const kitDoc = await kitRepository.create({
@@ -189,11 +197,21 @@ export class KitService {
       question.id = `q_${Date.now()}`;
     }
 
+    question.metadata = {
+      origin: "user",
+      edited: false,
+      pinned: false,
+      state: "active",
+      revision: 1,
+      ...question.metadata,
+    };
+
     kit.questions.push(question);
 
     // Re-evaluate coverage and schedule
     const coverage = checkRequirementCoverage(kit.role.requirements, kit.questions);
     kit.coverage.uncovered_requirement_ids = coverage.uncoveredRequirementIds;
+    kit.schedule = allocateSchedule(kit.schedule.days_available, kit.questions, kit.role.requirements);
 
     return this.updateKit(kitId, userId, doc.version, kit);
   }
@@ -213,14 +231,36 @@ export class KitService {
       throw new AppError(404, "QUESTION_NOT_FOUND", `Question '${questionId}' not found`);
     }
 
+    const currentMeta = kit.questions[qIndex].metadata || {
+      origin: "generated",
+      edited: false,
+      pinned: false,
+      state: "active",
+      revision: 0,
+    };
+
+    const newMeta = {
+      ...currentMeta,
+      origin: "user" as const,
+      edited: true,
+      editedAt: new Date().toISOString(),
+      pinned:
+        patch.metadata?.pinned !== undefined ? patch.metadata.pinned : currentMeta.pinned ?? false,
+      state: currentMeta.state || "active",
+      revision: (currentMeta.revision || 0) + 1,
+    };
+
     kit.questions[qIndex] = {
       ...kit.questions[qIndex],
       ...patch,
       id: questionId, // id is immutable
+      metadata: newMeta,
     };
 
+    // Re-evaluate coverage and schedule
     const coverage = checkRequirementCoverage(kit.role.requirements, kit.questions);
     kit.coverage.uncovered_requirement_ids = coverage.uncoveredRequirementIds;
+    kit.schedule = allocateSchedule(kit.schedule.days_available, kit.questions, kit.role.requirements);
 
     return this.updateKit(kitId, userId, doc.version, kit);
   }
@@ -237,13 +277,10 @@ export class KitService {
       throw new AppError(404, "QUESTION_NOT_FOUND", `Question '${questionId}' not found`);
     }
 
-    // Remove from schedule references
-    for (const day of kit.schedule.days) {
-      day.question_ids = day.question_ids.filter((id) => id !== questionId);
-    }
-
+    // Re-evaluate coverage and schedule
     const coverage = checkRequirementCoverage(kit.role.requirements, kit.questions);
     kit.coverage.uncovered_requirement_ids = coverage.uncoveredRequirementIds;
+    kit.schedule = allocateSchedule(kit.schedule.days_available, kit.questions, kit.role.requirements);
 
     return this.updateKit(kitId, userId, doc.version, kit);
   }
@@ -289,6 +326,16 @@ export class KitService {
     if (kit.flashcards.some((f) => f.id === flashcard.id)) {
       flashcard.id = `f_${Date.now()}`;
     }
+
+    flashcard.metadata = {
+      origin: "user",
+      edited: false,
+      pinned: false,
+      state: "active",
+      revision: 1,
+      ...flashcard.metadata,
+    };
+
     kit.flashcards.push(flashcard);
     return this.updateKit(kitId, userId, doc.version, kit);
   }
@@ -308,10 +355,30 @@ export class KitService {
       throw new AppError(404, "FLASHCARD_NOT_FOUND", `Flashcard '${flashcardId}' not found`);
     }
 
+    const currentMeta = kit.flashcards[fIndex].metadata || {
+      origin: "generated",
+      edited: false,
+      pinned: false,
+      state: "active",
+      revision: 0,
+    };
+
+    const newMeta = {
+      ...currentMeta,
+      origin: "user" as const,
+      edited: true,
+      editedAt: new Date().toISOString(),
+      pinned:
+        patch.metadata?.pinned !== undefined ? patch.metadata.pinned : currentMeta.pinned ?? false,
+      state: currentMeta.state || "active",
+      revision: (currentMeta.revision || 0) + 1,
+    };
+
     kit.flashcards[fIndex] = {
       ...kit.flashcards[fIndex],
       ...patch,
       id: flashcardId,
+      metadata: newMeta,
     };
     return this.updateKit(kitId, userId, doc.version, kit);
   }
@@ -326,11 +393,11 @@ export class KitService {
   }
 
   // --------------------------------------------------------------------------
-  // Section Regeneration (Preserving User Edits)
+  // Section Regeneration (Preserving User Edits & Grounded in Saved Research)
   // --------------------------------------------------------------------------
 
   /**
-   * Regenerates only the company brief.
+   * Regenerates only the company brief, strictly grounded in the saved research evidence.
    */
   async regenerateCompanyBrief(
     kitId: string,
@@ -341,10 +408,30 @@ export class KitService {
     if (!doc.kit) throw new AppError(400, "KIT_NOT_READY", "Kit has not finished generating");
 
     const kit = doc.kit;
+
+    // Ground regeneration in saved research snapshot
+    const crawlPages = (kit.research?.pages_content || []).map((p) => ({
+      url: p.url,
+      title: p.title || "",
+      text: p.content,
+      sourceType: "company" as const,
+      retrievedAt: new Date().toISOString(),
+      status: "ok" as const,
+    }));
+
+    const discussionFindings: SearchResultItem[] = (
+      kit.research?.discussion_content || []
+    ).map((d) => ({
+      url: d.source,
+      title: "",
+      snippet: d.snippet,
+      sourceType: "public-discussion" as const,
+    }));
+
     const briefPrompt = buildCompanyBriefPrompt(
       kit.source.company,
-      [], // Use existing sources for reference
-      []
+      crawlPages,
+      discussionFindings
     );
 
     const newBrief = await llm.generateStructured<CompanyBrief>(
@@ -380,12 +467,10 @@ export class KitService {
     const preservedInOtherCategories = kit.questions.filter((q) => q.category !== category);
     const categoryQuestions = kit.questions.filter((q) => q.category === category);
 
-    // Any question with custom metadata or user changes is preserved
+    // Any question with custom metadata, pinned, edited, or user origin is preserved
     const preservedQuestions: Question[] = [];
     for (const q of categoryQuestions) {
-      // Check if question has metadata.pinned or is user origin
-      const qWithMeta = q as Question & { metadata?: { pinned?: boolean; origin?: string } };
-      if (qWithMeta.metadata?.pinned || qWithMeta.metadata?.origin === "user") {
+      if (q.metadata?.pinned || q.metadata?.edited || q.metadata?.origin === "user") {
         preservedQuestions.push(q);
       }
     }
@@ -423,6 +508,13 @@ export class KitService {
       ...q,
       id: `q_reg_${category}_${idx + 1}`,
       category,
+      metadata: {
+        origin: "generated" as const,
+        edited: false,
+        pinned: false,
+        state: "active" as const,
+        revision: 0,
+      },
     }));
 
     // Merge: preserved from other categories + preserved in this category + new questions

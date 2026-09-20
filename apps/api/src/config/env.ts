@@ -24,6 +24,7 @@ const EnvSchema = z.object({
   LLM_PROVIDER: z.string().default("gemini"),
   GEMINI_API_KEY: z.string().optional(),
   GEMINI_MODEL: z.string().default("gemini-2.0-flash"),
+  GEMINI_FALLBACK_MODEL: z.string().default("gemini-2.0-flash"),
 
   // Public Search Provider
   SEARCH_PROVIDER: z.string().default("serpapi"),

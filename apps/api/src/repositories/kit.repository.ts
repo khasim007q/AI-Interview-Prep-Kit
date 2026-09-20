@@ -108,6 +108,18 @@ export class KitRepository {
     });
   }
 
+  async findActiveOrCompleted(
+    userId: string | ObjectId,
+    inputHash: string
+  ): Promise<KitDoc | null> {
+    const userObjId = typeof userId === "string" ? new ObjectId(userId) : userId;
+    return this.collection.findOne({
+      userId: userObjId,
+      inputHash,
+      status: { $in: ["completed", "running", "queued"] },
+    });
+  }
+
   /**
    * Updates generation progress metadata.
    */

@@ -1,10 +1,10 @@
-import type {
-  Kit,
-  Requirement,
-  Question,
-  Flashcard,
-  QuestionCategory,
-  CompanyBrief,
+import {
+  type Kit,
+  type Question,
+  type Flashcard,
+  type QuestionCategory,
+  type CompanyBrief,
+  type ResearchSourceFailed,
 } from "@ai-interview-prep/shared";
 import { normalizeJobDescription } from "../deterministic/jd-normalizer.js";
 import { checkRequirementCoverage } from "../deterministic/coverage-checker.js";
@@ -41,8 +41,28 @@ import {
   FlashcardsOutputSchema,
   type FlashcardsOutput,
 } from "../ai/prompts/generate-flashcards.prompt.js";
-import { logger } from "../utils/logger.js";
 import { AppError } from "../middleware/error.middleware.js";
+import { logger } from "../utils/logger.js";
+
+export type PipelineStage =
+  | "validation"
+  | "extracting_requirements"
+  | "crawling_company"
+  | "researching_discussion"
+  | "generating_brief"
+  | "generating_questions"
+  | "checking_coverage"
+  | "generating_flashcards"
+  | "building_schedule"
+  | "validating_kit"
+  | "completed"
+  | "failed";
+
+export type ProgressCallback = (
+  stage: PipelineStage,
+  progress: number,
+  message: string
+) => Promise<void> | void;
 
 export interface GenerationInput {
   jd: string;
@@ -50,28 +70,18 @@ export interface GenerationInput {
   days: number;
 }
 
-export type ProgressCallback = (
-  stage: string,
-  progress: number,
-  message: string
-) => Promise<void> | void;
-
-export interface OrchestratorOptions {
+export interface PipelineOptions {
   llmProvider?: LLMProvider;
   onProgress?: ProgressCallback;
   maxCoveragePasses?: number;
 }
 
 /**
- * Executes the complete staged interview preparation pipeline.
- *
- * LLM is used strictly for semantic understanding and content generation.
- * Deterministic code owns URL validation, crawling limits, coverage checking,
- * schedule allocation, schema validation, and error boundaries.
+ * Executes the complete 9-stage interview preparation kit generation pipeline.
  */
 export async function runGenerationPipeline(
   input: GenerationInput,
-  options: OrchestratorOptions = {}
+  options: PipelineOptions = {}
 ): Promise<Kit> {
   const llm = options.llmProvider || defaultLLMProvider;
   const onProgress = options.onProgress || (() => {});
@@ -90,11 +100,11 @@ export async function runGenerationPipeline(
   }
 
   const normalizedJd = normalizeJobDescription(input.jd);
-  if (normalizedJd.charCount < 50) {
+  if (normalizedJd.charCount === 0) {
     throw new AppError(
       400,
-      "JD_TOO_SHORT",
-      "Job description is too brief. Please provide a detailed job posting."
+      "JD_EMPTY",
+      "Job description cannot be empty. Please provide a job posting."
     );
   }
 
@@ -130,14 +140,38 @@ export async function runGenerationPipeline(
   logger.info({ url: urlValidation.normalizedUrl }, "Pipeline stage 2: Company Website Crawl");
 
   let crawlPages: ResearchPage[] = [];
+  const sourcesAttempted: string[] = [urlValidation.normalizedUrl];
+  const sourcesUsed: string[] = [];
+  const sourcesFailed: ResearchSourceFailed[] = [];
+  let hiringPageFound = false;
+
   try {
     const crawlResult = await crawlCompanySite(urlValidation.normalizedUrl, {
       maxPages: 8,
       maxDepth: 2,
     });
     crawlPages = crawlResult.pages;
+    hiringPageFound = crawlResult.hiringPageFound;
+
+    for (const p of crawlResult.pages) {
+      sourcesUsed.push(p.url);
+      if (!sourcesAttempted.includes(p.url)) {
+        sourcesAttempted.push(p.url);
+      }
+    }
+
+    for (const err of crawlResult.errors) {
+      sourcesFailed.push({ url: err.url, reason: err.message });
+      if (!sourcesAttempted.includes(err.url)) {
+        sourcesAttempted.push(err.url);
+      }
+    }
   } catch (crawlErr) {
     logger.warn({ crawlErr }, "Company crawl encountered non-fatal error; proceeding with available data");
+    sourcesFailed.push({
+      url: urlValidation.normalizedUrl,
+      reason: (crawlErr as Error).message || "Crawl failed",
+    });
   }
 
   // Refine company name from page titles if available
@@ -161,8 +195,17 @@ export async function runGenerationPipeline(
   };
   try {
     publicDiscussion = await researchPublicInterviewDiscussion(companyName);
+    for (const f of publicDiscussion.findings) {
+      if (f.url && !sourcesUsed.includes(f.url)) {
+        sourcesUsed.push(f.url);
+      }
+    }
   } catch (searchErr) {
     logger.warn({ searchErr }, "Public discussion search failed non-fatally");
+    sourcesFailed.push({
+      url: `Public Search (${companyName})`,
+      reason: (searchErr as Error).message || "Public discussion search failed",
+    });
   }
 
   // --------------------------------------------------------------------------
@@ -184,6 +227,11 @@ export async function runGenerationPipeline(
   // Guarantee companyBrief has at least rootUrl in sources if none returned
   if (companyBrief.sources.length === 0) {
     companyBrief.sources = [urlValidation.normalizedUrl];
+  }
+
+  // If the JD was very short (e.g. 2 lines), ensure honest notice
+  if (normalizedJd.charCount < 180 && !companyBrief.summary.includes("limited source information")) {
+    companyBrief.summary = `${companyBrief.summary} (Note: Prepared from a concise job posting with limited source information.)`;
   }
 
   // --------------------------------------------------------------------------
@@ -253,6 +301,20 @@ export async function runGenerationPipeline(
     }
   }
 
+  // Handle 0-requirement edge case (e.g. 2-line minimal JD without explicit technical requirements)
+  if (roleOutput.requirements.length === 0 && allQuestions.length === 0) {
+    for (const cat of categories) {
+      allQuestions.push({
+        id: `q${questionCounter++}`,
+        requirement_ids: [],
+        category: cat,
+        prompt: `Describe your technical experience and general problem-solving approach relevant to the ${roleOutput.seniority} ${roleOutput.title} position.`,
+        answer_outline: `Present concrete project examples, architectural decisions, trade-offs made, and how you collaborate in an engineering team.`,
+        difficulty: 2,
+      });
+    }
+  }
+
   // Fallback: If no questions were generated due to provider issues, synthesize baseline questions
   if (allQuestions.length === 0 && roleOutput.requirements.length > 0) {
     roleOutput.requirements.forEach((req, idx) => {
@@ -314,6 +376,19 @@ export async function runGenerationPipeline(
       logger.warn({ targetedErr }, "Targeted coverage generation encountered error");
       break;
     }
+  }
+
+  // Mandatory Must-Have Coverage Gate: Kit fails if must-have requirements remain uncovered
+  if (!coverage.isMustCovered) {
+    logger.error(
+      { uncovered: coverage.mustUncoveredRequirementIds },
+      "Must-have requirements remain uncovered after all allowed passes"
+    );
+    throw new AppError(
+      500,
+      "MUST_REQUIREMENTS_UNCOVERED",
+      `Unable to cover all must-have requirements after allowed generation passes (${maxCoveragePasses} passes). Uncovered: ${coverage.mustUncoveredRequirementIds.join(", ")}`
+    );
   }
 
   // --------------------------------------------------------------------------
@@ -388,9 +463,29 @@ export async function runGenerationPipeline(
       uncovered_requirement_ids: coverage.uncoveredRequirementIds,
       passes: coveragePass,
     },
+    research: {
+      sources_attempted: sourcesAttempted,
+      sources_used: sourcesUsed.length > 0 ? sourcesUsed : pagesUsed,
+      sources_failed: sourcesFailed,
+      public_discussion: {
+        found: publicDiscussion.hasDiscussion,
+        sources: publicDiscussion.findings.map((f) => f.url),
+      },
+      hiring_page_found: hiringPageFound,
+      pages_content: crawlPages.map((p) => ({
+        url: p.url,
+        title: p.title || "",
+        content: p.text,
+      })),
+      discussion_content: publicDiscussion.findings.map((f) => ({
+        source: f.url,
+        snippet: f.snippet,
+      })),
+    },
   };
 
-  const validation = validateKitStructure(finalKit, { requireMustCoverage: false });
+  // Enforce mandatory must-coverage in final validation
+  const validation = validateKitStructure(finalKit, { requireMustCoverage: true });
   if (!validation.isValid) {
     logger.error({ errors: validation.errors }, "Generated kit failed structure validation");
     throw new AppError(

@@ -32,14 +32,21 @@ function cleanJsonOutput(raw: string): string {
 
 /**
  * Gemini implementation of LLMProvider with structured JSON output,
- * retry with exponential backoff for rate limits, and schema validation.
+ * retry with exponential backoff for rate limits and 503 errors,
+ * and automatic model fallback when the primary model is unavailable.
  */
 export class GeminiProvider implements LLMProvider {
   private genAI: GoogleGenerativeAI | null = null;
-  private modelName: string;
+  private primaryModel: string;
+  private fallbackModel: string;
 
-  constructor(apiKey = env.GEMINI_API_KEY || "", model = env.GEMINI_MODEL || "gemini-2.0-flash") {
-    this.modelName = model;
+  constructor(
+    apiKey = env.GEMINI_API_KEY || "",
+    model = env.GEMINI_MODEL || "gemini-2.0-flash",
+    fallbackModel = env.GEMINI_FALLBACK_MODEL || "gemini-2.0-flash"
+  ) {
+    this.primaryModel = model;
+    this.fallbackModel = fallbackModel;
     if (apiKey) {
       this.genAI = new GoogleGenerativeAI(apiKey);
     }
@@ -54,8 +61,54 @@ export class GeminiProvider implements LLMProvider {
       );
     }
 
-    const model = this.genAI.getGenerativeModel({
-      model: this.modelName,
+    // Determine the models to try: primary first, then fallback (if different)
+    const modelsToTry =
+      this.primaryModel !== this.fallbackModel
+        ? [this.primaryModel, this.fallbackModel]
+        : [this.primaryModel];
+
+    let lastError: unknown;
+
+    for (const modelName of modelsToTry) {
+      const isFallback = modelName !== this.primaryModel;
+      if (isFallback) {
+        logger.warn(
+          { primary: this.primaryModel, fallback: modelName },
+          "Primary model exhausted retries, falling back to secondary model"
+        );
+      }
+
+      try {
+        const result = await this._tryWithRetries(request, schema, modelName);
+        return result;
+      } catch (err) {
+        lastError = err;
+        // If this was the primary model and we have a fallback, continue to try it
+        if (!isFallback && modelsToTry.length > 1) {
+          continue;
+        }
+        // If this was already the fallback (or no fallback configured), throw
+      }
+    }
+
+    throw new AppError(
+      502,
+      "LLM_GENERATION_FAILED",
+      `LLM generation failed after trying ${modelsToTry.length} model(s): ${(lastError as Error)?.message || "Unknown error"}`
+    );
+  }
+
+  /**
+   * Attempts LLM generation with retries, exponential backoff for
+   * rate limits (429) and service overload (503), and schema repair.
+   */
+  private async _tryWithRetries<T>(
+    request: LLMRequest,
+    schema: ZodType<T, any, any>,
+    modelName: string
+  ): Promise<T> {
+    const model = this.genAI!.getGenerativeModel({
+      model: modelName,
       systemInstruction: request.systemInstruction,
       generationConfig: {
         responseMimeType: "application/json",
@@ -71,7 +124,7 @@ export class GeminiProvider implements LLMProvider {
     while (attempt < MAX_ATTEMPTS) {
       attempt++;
       try {
-        logger.debug({ model: this.modelName, attempt }, "Calling Gemini API");
+        logger.debug({ model: modelName, attempt }, "Calling Gemini API");
         const result = await model.generateContent(currentPrompt);
         const rawText = result.response.text();
 
@@ -107,15 +160,25 @@ export class GeminiProvider implements LLMProvider {
         lastError = err;
         const msg = (err as Error)?.message || "";
 
-        // Handle rate limiting (429 / RESOURCE_EXHAUSTED)
-        if (msg.includes("429") || msg.includes("RESOURCE_EXHAUSTED") || msg.includes("quota")) {
+        // Handle rate limiting (429) and service overload (503)
+        if (
+          msg.includes("429") ||
+          msg.includes("503") ||
+          msg.includes("RESOURCE_EXHAUSTED") ||
+          msg.includes("quota") ||
+          msg.includes("overloaded") ||
+          msg.includes("Service Unavailable")
+        ) {
           const backoff = Math.pow(2, attempt) * 1500 + Math.random() * 500;
-          logger.warn({ attempt, backoff }, "Gemini rate limited, applying exponential backoff");
+          logger.warn(
+            { model: modelName, attempt, backoff, errorSnippet: msg.substring(0, 120) },
+            "Gemini rate limited or overloaded, applying exponential backoff"
+          );
           await new Promise((r) => setTimeout(r, backoff));
           continue;
         }
 
-        logger.error({ err, attempt }, "Gemini generation attempt error");
+        logger.error({ err, model: modelName, attempt }, "Gemini generation attempt error");
         if (attempt < MAX_ATTEMPTS) {
           await new Promise((r) => setTimeout(r, 1000 * attempt));
         }
@@ -124,8 +187,8 @@ export class GeminiProvider implements LLMProvider {
 
     throw new AppError(
       502,
-      "LLM_GENERATION_FAILED",
-      `LLM generation failed after ${MAX_ATTEMPTS} attempts: ${(lastError as Error)?.message || "Unknown error"}`
+      "LLM_MODEL_EXHAUSTED",
+      `Model ${modelName} failed after ${MAX_ATTEMPTS} attempts: ${(lastError as Error)?.message || "Unknown error"}`
     );
   }
 }

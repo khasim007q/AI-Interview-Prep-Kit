@@ -20,7 +20,7 @@ export class AuthController {
         maxAge: COOKIE_MAX_AGE_MS,
       });
 
-      res.status(201).json({ user, token });
+      res.status(201).json({ user });
     } catch (error) {
       next(error);
     }
@@ -39,7 +39,7 @@ export class AuthController {
         maxAge: COOKIE_MAX_AGE_MS,
       });
 
-      res.status(200).json({ user, token });
+      res.status(200).json({ user });
     } catch (error) {
       next(error);
     }

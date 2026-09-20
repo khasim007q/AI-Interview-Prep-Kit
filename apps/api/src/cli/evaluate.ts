@@ -11,6 +11,30 @@ import { defaultLLMProvider } from "../ai/llm-client.js";
 import { logger } from "../utils/logger.js";
 import { AppError } from "../middleware/error.middleware.js";
 
+const CASE_TIMEOUT_MS = 180000; // 3 minutes per case maximum
+const BATCH_OVERALL_TIMEOUT_MS = 14 * 60 * 1000; // 14 minutes hard safety boundary
+
+/**
+ * Wraps a promise with a hard timeout limit.
+ */
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, timeoutMsg: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new AppError(504, "CASE_TIMEOUT", timeoutMsg));
+    }, timeoutMs);
+
+    promise
+      .then((res) => {
+        clearTimeout(timer);
+        resolve(res);
+      })
+      .catch((err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+  });
+}
+
 /**
  * Parses CLI flags --input <file> and --output <file>
  */
@@ -33,27 +57,31 @@ function parseArgs(args: string[]): { inputPath?: string; outputPath?: string } 
 }
 
 /**
- * Processes a single batch case with resilient error containment.
+ * Processes a single batch case with bounded timeout and resilient error containment.
  */
 async function processCase(caseItem: BatchCaseInput): Promise<BatchCaseResult> {
   const startTime = Date.now();
   console.log(`[Batch] Starting case '${caseItem.id}' (${caseItem.company_url}, ${caseItem.days} days)...`);
 
   try {
-    const kit = await runGenerationPipeline(
-      {
-        jd: caseItem.jd,
-        company_url: caseItem.company_url,
-        days: caseItem.days,
-      },
-      {
-        llmProvider: defaultLLMProvider,
-        onProgress: (_stage, progress, message) => {
-          if (progress % 20 === 0 || progress === 100) {
-            console.log(`[Batch - ${caseItem.id}] [${progress}%] ${message}`);
-          }
+    const kit = await withTimeout(
+      runGenerationPipeline(
+        {
+          jd: caseItem.jd,
+          company_url: caseItem.company_url,
+          days: caseItem.days,
         },
-      }
+        {
+          llmProvider: defaultLLMProvider,
+          onProgress: (_stage, progress, message) => {
+            if (progress % 20 === 0 || progress === 100) {
+              console.log(`[Batch - ${caseItem.id}] [${progress}%] ${message}`);
+            }
+          },
+        }
+      ),
+      CASE_TIMEOUT_MS,
+      `Case '${caseItem.id}' exceeded per-case timeout limit of ${CASE_TIMEOUT_MS / 1000}s`
     );
 
     const durationSec = ((Date.now() - startTime) / 1000).toFixed(1);
@@ -84,19 +112,37 @@ async function processCase(caseItem: BatchCaseInput): Promise<BatchCaseResult> {
 }
 
 /**
- * Processes cases with controlled bounded concurrency to prevent provider throttling.
+ * Processes cases with controlled bounded concurrency and overall batch timeout.
  */
 async function processWithConcurrency(
   cases: BatchCaseInput[],
   concurrency = 2
 ): Promise<BatchCaseResult[]> {
   const results: BatchCaseResult[] = new Array(cases.length);
+  const batchStart = Date.now();
   let currentIndex = 0;
 
   async function worker(): Promise<void> {
     while (currentIndex < cases.length) {
       const idx = currentIndex++;
-      results[idx] = await processCase(cases[idx]);
+      const caseItem = cases[idx];
+
+      // Check if overall batch deadline was exceeded
+      if (Date.now() - batchStart > BATCH_OVERALL_TIMEOUT_MS) {
+        console.warn(`[Batch] Overall batch deadline reached. Aborting remaining case '${caseItem.id}'.`);
+        results[idx] = {
+          id: caseItem.id,
+          status: "failed",
+          kit: null,
+          error: {
+            code: "BATCH_TIMEOUT",
+            message: "Batch evaluator exceeded overall 14-minute safety execution boundary",
+          },
+        };
+        continue;
+      }
+
+      results[idx] = await processCase(caseItem);
     }
   }
 

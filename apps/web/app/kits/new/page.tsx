@@ -18,8 +18,8 @@ export default function NewKitPage() {
     e.preventDefault();
     setError(null);
 
-    if (jd.trim().length < 50) {
-      setError("Please paste a comprehensive job description (at least 50 characters).");
+    if (jd.trim().length === 0) {
+      setError("Please provide a job description.");
       return;
     }
 
