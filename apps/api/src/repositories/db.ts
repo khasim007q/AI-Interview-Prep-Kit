@@ -14,7 +14,7 @@ export async function connectToDatabase(): Promise<Db> {
     logger.info("Connecting to MongoDB...");
     client = new MongoClient(env.MONGODB_URI, {
       maxPoolSize: 10,
-      serverSelectionTimeoutMS: 5000,
+      serverSelectionTimeoutMS: 10000,
     });
 
     await client.connect();
@@ -26,7 +26,10 @@ export async function connectToDatabase(): Promise<Db> {
 
     return db;
   } catch (error) {
-    logger.error({ error }, "Failed to connect to MongoDB");
+    logger.error(
+      { error },
+      "Failed to connect to MongoDB. Check that: 1) MongoDB Atlas IP Access List allows 0.0.0.0/0, 2) DB credentials in MONGODB_URI are correct and URL-encoded."
+    );
     throw error;
   }
 }
