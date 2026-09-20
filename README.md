@@ -147,7 +147,7 @@ cp .env.example .env
 | `SESSION_SECRET` | Secret key for session cookies | Min 16 chars |
 | `LLM_PROVIDER` | LLM provider adapter | `gemini` |
 | `GEMINI_API_KEY` | Google Gemini API Key | Required for live LLM |
-| `GEMINI_MODEL` | Gemini Model version | `gemini-2.0-flash` |
+| `GEMINI_MODEL` | Gemini Model version | `gemini-3.6-flash` |
 | `SEARCH_PROVIDER` | Public search provider | `serpapi` |
 | `SERPAPI_API_KEY` | SerpAPI Key | Optional (graceful fallback) |
 | `FRONTEND_URL` | Frontend URL for CORS | `http://localhost:3000` |
