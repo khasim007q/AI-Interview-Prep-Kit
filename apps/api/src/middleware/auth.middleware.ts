@@ -1,6 +1,7 @@
 import type { Request, Response, NextFunction } from "express";
 import { authService } from "../services/auth.service.js";
 import { AppError } from "./error.middleware.js";
+import { logger } from "../utils/logger.js";
 import type { UserResponse } from "@ai-interview-prep/shared";
 
 declare global {
@@ -28,11 +29,27 @@ export async function requireAuth(
     }
 
     if (!token) {
+      logger.warn(
+        {
+          path: req.originalUrl || req.url,
+          method: req.method,
+          origin: req.headers.origin || "none",
+          hasCookies: Boolean(req.cookies && Object.keys(req.cookies).length > 0),
+        },
+        "Authentication required: No session cookie or Bearer header provided"
+      );
       throw new AppError(401, "UNAUTHENTICATED", "Authentication required");
     }
 
     const user = await authService.validateSession(token);
     if (!user) {
+      logger.warn(
+        {
+          path: req.originalUrl || req.url,
+          method: req.method,
+        },
+        "Authentication rejected: Session is invalid or has expired"
+      );
       throw new AppError(401, "UNAUTHENTICATED", "Invalid or expired session");
     }
 

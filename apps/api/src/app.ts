@@ -2,6 +2,7 @@ import express from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
 import { env } from "./config/env.js";
+import { logger } from "./utils/logger.js";
 import { errorMiddleware } from "./middleware/error.middleware.js";
 import { authRouter } from "./routes/auth.routes.js";
 import { kitsRouter } from "./routes/kits.routes.js";
@@ -20,26 +21,65 @@ const allowedOrigins = (env.FRONTEND_URL || "")
 app.use(
   cors({
     origin: (origin, callback) => {
-      // Allow requests with no origin (mobile, curl, health checks)
+      // Allow requests with no origin (mobile native, curl, CLI batch evaluator, server health checks)
       if (!origin) return callback(null, true);
 
       const normalized = origin.replace(/\/$/, "");
-      if (
+
+      // Local development origins
+      if (env.NODE_ENV !== "production") {
+        if (
+          normalized.includes("localhost") ||
+          normalized.includes("127.0.0.1") ||
+          allowedOrigins.includes(normalized)
+        ) {
+          return callback(null, true);
+        }
+      }
+
+      // Production origins: check configured frontend allowlist and Vercel preview domains if target is vercel
+      const isAllowed =
         allowedOrigins.includes(normalized) ||
-        allowedOrigins.includes("*") ||
-        (env.NODE_ENV !== "production" && normalized.includes("localhost")) ||
-        // Permit Vercel preview URLs if FRONTEND_URL targets vercel.app
-        (normalized.endsWith(".vercel.app") && allowedOrigins.some((o) => o.includes("vercel.app")))
-      ) {
+        (normalized.endsWith(".vercel.app") && allowedOrigins.some((o) => o.includes("vercel.app")));
+
+      if (isAllowed) {
         return callback(null, true);
       }
 
-      // Default allow with dynamic origin to prevent CORS blocking
-      return callback(null, true);
+      logger.warn({ origin: normalized, allowedOrigins }, "CORS blocked request from untrusted origin");
+      return callback(null, false);
     },
     credentials: true,
   })
 );
+
+// CSRF Origin Protection for browser-originated state-changing requests in production
+const STATE_CHANGING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+app.use((req, res, next) => {
+  if (env.NODE_ENV === "production" && STATE_CHANGING_METHODS.has(req.method)) {
+    const origin = req.headers.origin;
+    if (origin) {
+      const normalized = origin.replace(/\/$/, "");
+      const isAllowed =
+        allowedOrigins.includes(normalized) ||
+        (normalized.endsWith(".vercel.app") && allowedOrigins.some((o) => o.includes("vercel.app")));
+
+      if (!isAllowed) {
+        logger.warn(
+          { origin: normalized, method: req.method, path: req.path },
+          "CSRF check blocked request from untrusted origin"
+        );
+        return res.status(403).json({
+          error: {
+            code: "CSRF_ORIGIN_FORBIDDEN",
+            message: "Cross-site request blocked: Origin not authorized",
+          },
+        });
+      }
+    }
+  }
+  next();
+});
 
 // Body and Cookie Parsers
 app.use(express.json({ limit: "5mb" }));
