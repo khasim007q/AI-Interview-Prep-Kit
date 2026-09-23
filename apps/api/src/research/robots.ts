@@ -1,5 +1,8 @@
 import robotsParser from "robots-parser";
 import { logger } from "../utils/logger.js";
+import { fetchWebPage } from "./page-fetcher.js";
+import { validateHostResolution } from "../security/url-validator.js";
+import { env } from "../config/env.js";
 
 interface RobotsCacheEntry {
   parser: ReturnType<typeof robotsParser>;
@@ -12,12 +15,22 @@ const USER_AGENT = "AIInterviewPrepBot/1.0 (+https://ai-interview-prep.example.c
 
 /**
  * Checks if a given URL is allowed to be crawled according to the site's robots.txt.
+ * Fully protects against SSRF on robots.txt requests and redirect hops.
  */
-export async function isUrlAllowedByRobots(targetUrl: string): Promise<boolean> {
+export async function isUrlAllowedByRobots(
+  targetUrl: string,
+  allowLocalFetch = env.ALLOW_LOCAL_FETCH
+): Promise<boolean> {
   let parsed: URL;
   try {
     parsed = new URL(targetUrl);
   } catch {
+    return false;
+  }
+
+  // SSRF check on target host
+  const hostCheck = await validateHostResolution(parsed.hostname, allowLocalFetch);
+  if (!hostCheck.isValid) {
     return false;
   }
 
@@ -30,21 +43,21 @@ export async function isUrlAllowedByRobots(targetUrl: string): Promise<boolean> 
   }
 
   try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 4000);
-
-    const res = await fetch(robotsUrl, {
-      signal: controller.signal,
-      headers: { "User-Agent": USER_AGENT },
+    const fetchRes = await fetchWebPage(robotsUrl, {
+      timeoutMs: 4000,
+      maxBytes: 512 * 1024,
+      allowLocalFetch,
     });
-    clearTimeout(timeout);
 
-    if (res.ok) {
-      const robotsText = await res.text();
-      const parser = robotsParser(robotsUrl, robotsText);
+    if (fetchRes.ok && fetchRes.html) {
+      const parser = robotsParser(robotsUrl, fetchRes.html);
       robotsCache.set(origin, { parser, cachedAt: Date.now() });
       return parser.isAllowed(targetUrl, USER_AGENT) ?? true;
     } else {
+      // If blocked by SSRF (status 403), reject
+      if (fetchRes.status === 403) {
+        return false;
+      }
       // 404 or missing robots.txt implies no crawl restrictions
       const permissiveParser = robotsParser(robotsUrl, "");
       robotsCache.set(origin, { parser: permissiveParser, cachedAt: Date.now() });

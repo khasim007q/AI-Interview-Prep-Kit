@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import {
   type Kit,
   type Question,
@@ -16,7 +17,11 @@ import {
   researchPublicInterviewDiscussion,
   type PublicInterviewResearch,
 } from "../research/discussion-search.js";
-import { defaultLLMProvider, type LLMProvider } from "../ai/llm-client.js";
+import {
+  defaultLLMProvider,
+  type LLMProvider,
+  type GenerationContext,
+} from "../ai/llm-client.js";
 import {
   buildExtractRequirementsPrompt,
   ExtractedRoleOutputSchema,
@@ -43,6 +48,10 @@ import {
 } from "../ai/prompts/generate-flashcards.prompt.js";
 import { AppError } from "../middleware/error.middleware.js";
 import { logger } from "../utils/logger.js";
+import { createLimiter } from "../utils/limiter.js";
+import { researchCacheRepository } from "../repositories/research-cache.repository.js";
+import { sha256 } from "../utils/hash.js";
+import { env } from "../config/env.js";
 
 export type PipelineStage =
   | "validation"
@@ -74,20 +83,63 @@ export interface PipelineOptions {
   llmProvider?: LLMProvider;
   onProgress?: ProgressCallback;
   maxCoveragePasses?: number;
+  generationId?: string;
+  maxGenerationTimeMs?: number;
+  maxLlmCalls?: number;
+  llmConcurrency?: number;
 }
 
 /**
- * Executes the complete 9-stage interview preparation kit generation pipeline.
+ * Executes the complete interview preparation kit generation pipeline with:
+ * - Parallel execution of independent research (company crawl || public discussion)
+ * - Bounded parallel execution of category question generation
+ * - Canonical deterministic question merging and sequential ID assignment
+ * - Global generation deadline and LLM call budget enforcement
+ * - Mandatory must-have coverage gate
+ * - Comprehensive structured observability
  */
 export async function runGenerationPipeline(
   input: GenerationInput,
   options: PipelineOptions = {}
 ): Promise<Kit> {
+  const generationId = options.generationId || crypto.randomUUID();
+  const maxGenerationTimeMs =
+    options.maxGenerationTimeMs ?? env.MAX_GENERATION_TIME_MS ?? 120000;
+  const deadline = Date.now() + maxGenerationTimeMs;
+  const maxLlmCalls =
+    options.maxLlmCalls ?? env.MAX_LLM_CALLS_PER_GENERATION ?? 12;
+  const maxCoveragePasses =
+    options.maxCoveragePasses ?? env.MAX_COVERAGE_PASSES ?? 2;
+  const llmConcurrency =
+    options.llmConcurrency ?? env.MAX_CONCURRENT_LLM_CALLS ?? 2;
+
+  let llmCallCount = 0;
+  const llmContext: GenerationContext = {
+    generationId,
+    deadline,
+    maxCalls: maxLlmCalls,
+    get callCount() {
+      return llmCallCount;
+    },
+    incrementCallCount() {
+      llmCallCount++;
+    },
+  };
+
   const llm = options.llmProvider || defaultLLMProvider;
   const onProgress = options.onProgress || (() => {});
-  const maxCoveragePasses = options.maxCoveragePasses ?? 3;
+  const llmLimiter = createLimiter(llmConcurrency);
 
-  logger.info({ url: input.company_url, days: input.days }, "Starting kit generation pipeline");
+  logger.info(
+    {
+      generationId,
+      url: input.company_url,
+      days: input.days,
+      deadlineMs: maxGenerationTimeMs,
+      maxCalls: maxLlmCalls,
+    },
+    "Starting production kit generation pipeline"
+  );
 
   // --------------------------------------------------------------------------
   // Stage 0: Input Validation & Normalization
@@ -96,7 +148,11 @@ export async function runGenerationPipeline(
 
   const urlValidation = validateAndNormalizeUrl(input.company_url);
   if (!urlValidation.isValid || !urlValidation.normalizedUrl) {
-    throw new AppError(400, "COMPANY_INVALID_URL", urlValidation.error || "Invalid company URL");
+    throw new AppError(
+      400,
+      "COMPANY_INVALID_URL",
+      urlValidation.error || "Invalid company URL"
+    );
   }
 
   const normalizedJd = normalizeJobDescription(input.jd);
@@ -113,31 +169,89 @@ export async function runGenerationPipeline(
   // Derive initial company name guess from URL domain
   let companyName = "Company";
   try {
-    const domainParts = new URL(urlValidation.normalizedUrl).hostname.replace(/^www\./, "").split(".");
+    const domainParts = new URL(urlValidation.normalizedUrl).hostname
+      .replace(/^www\./, "")
+      .split(".");
     if (domainParts.length > 0) {
-      companyName = domainParts[0].charAt(0).toUpperCase() + domainParts[0].slice(1);
+      companyName =
+        domainParts[0].charAt(0).toUpperCase() + domainParts[0].slice(1);
     }
   } catch {
     // fallback
   }
 
   // --------------------------------------------------------------------------
-  // Stage 1: Requirement Extraction (LLM)
+  // Stage 1: Requirement Extraction (LLM with Content-Addressed Cache)
   // --------------------------------------------------------------------------
-  await onProgress("extracting_requirements", 15, "Extracting requirements from job description");
-  logger.info("Pipeline stage 1: Requirement Extraction");
+  await onProgress(
+    "extracting_requirements",
+    15,
+    "Extracting requirements from job description"
+  );
+  logger.info({ generationId }, "Pipeline stage 1: Requirement Extraction");
 
   const reqPrompt = buildExtractRequirementsPrompt(normalizedJd.text);
-  const roleOutput = await llm.generateStructured<ExtractedRoleOutput>(
-    reqPrompt,
-    ExtractedRoleOutputSchema
+  const extractCacheKey = sha256(`llm_extract::${normalizedJd.text}::v1`);
+
+  let roleOutput: ExtractedRoleOutput;
+  const cachedExtract = await researchCacheRepository.get<ExtractedRoleOutput>(
+    extractCacheKey
   );
 
+  if (cachedExtract) {
+    logger.info(
+      { generationId, stage: "extracting_requirements", cacheHit: true },
+      "Reusing cached requirement extraction"
+    );
+    roleOutput = cachedExtract;
+  } else {
+    roleOutput = await llm.generateStructured<ExtractedRoleOutput>(
+      reqPrompt,
+      ExtractedRoleOutputSchema,
+      llmContext
+    );
+    await researchCacheRepository.set(
+      extractCacheKey,
+      "llm_extract",
+      roleOutput,
+      24
+    );
+  }
+
   // --------------------------------------------------------------------------
-  // Stage 2: Company Research Crawl (Deterministic Crawler)
+  // Stage 2 & 3: Independent Company Crawl & Public Discussion Research (Parallel)
+  // Phase 3A: Execute concurrently using Promise.allSettled()
   // --------------------------------------------------------------------------
-  await onProgress("crawling_company", 30, `Researching company website (${companyName})`);
-  logger.info({ url: urlValidation.normalizedUrl }, "Pipeline stage 2: Company Website Crawl");
+  await onProgress(
+    "crawling_company",
+    30,
+    `Researching company website and interview discussions (${companyName})`
+  );
+  logger.info(
+    { generationId, url: urlValidation.normalizedUrl, companyName },
+    "Pipeline stage 2 & 3: Concurrent Company Crawl & Public Discussion Research"
+  );
+
+  const researchStart = Date.now();
+  const [crawlSettled, discussionSettled] = await Promise.allSettled([
+    crawlCompanySite(urlValidation.normalizedUrl, {
+      maxPages: 8,
+      maxDepth: 2,
+      concurrency: env.MAX_CONCURRENT_CRAWL_REQUESTS_PER_DOMAIN,
+    }),
+    researchPublicInterviewDiscussion(companyName),
+  ]);
+
+  logger.info(
+    {
+      generationId,
+      stage: "research",
+      durationMs: Date.now() - researchStart,
+      crawlStatus: crawlSettled.status,
+      discussionStatus: discussionSettled.status,
+    },
+    "Independent research phase completed in parallel"
+  );
 
   let crawlPages: ResearchPage[] = [];
   const sourcesAttempted: string[] = [urlValidation.normalizedUrl];
@@ -145,11 +259,8 @@ export async function runGenerationPipeline(
   const sourcesFailed: ResearchSourceFailed[] = [];
   let hiringPageFound = false;
 
-  try {
-    const crawlResult = await crawlCompanySite(urlValidation.normalizedUrl, {
-      maxPages: 8,
-      maxDepth: 2,
-    });
+  if (crawlSettled.status === "fulfilled") {
+    const crawlResult = crawlSettled.value;
     crawlPages = crawlResult.pages;
     hiringPageFound = crawlResult.hiringPageFound;
 
@@ -166,11 +277,14 @@ export async function runGenerationPipeline(
         sourcesAttempted.push(err.url);
       }
     }
-  } catch (crawlErr) {
-    logger.warn({ crawlErr }, "Company crawl encountered non-fatal error; proceeding with available data");
+  } else {
+    logger.warn(
+      { generationId, crawlErr: crawlSettled.reason },
+      "Company crawl encountered non-fatal error; proceeding with available data"
+    );
     sourcesFailed.push({
       url: urlValidation.normalizedUrl,
-      reason: (crawlErr as Error).message || "Crawl failed",
+      reason: (crawlSettled.reason as Error)?.message || "Crawl failed",
     });
   }
 
@@ -182,46 +296,51 @@ export async function runGenerationPipeline(
     }
   }
 
-  // --------------------------------------------------------------------------
-  // Stage 3: Public Interview Discussion Research
-  // --------------------------------------------------------------------------
-  await onProgress("researching_discussion", 45, "Searching public discussion of interview process");
-  logger.info({ companyName }, "Pipeline stage 3: Public Interview Research");
-
   let publicDiscussion: PublicInterviewResearch = {
     company: companyName,
     hasDiscussion: false,
     findings: [],
   };
-  try {
-    publicDiscussion = await researchPublicInterviewDiscussion(companyName);
+
+  if (discussionSettled.status === "fulfilled") {
+    publicDiscussion = discussionSettled.value;
     for (const f of publicDiscussion.findings) {
       if (f.url && !sourcesUsed.includes(f.url)) {
         sourcesUsed.push(f.url);
       }
     }
-  } catch (searchErr) {
-    logger.warn({ searchErr }, "Public discussion search failed non-fatally");
+  } else {
+    logger.warn(
+      { generationId, searchErr: discussionSettled.reason },
+      "Public discussion search failed non-fatally"
+    );
     sourcesFailed.push({
       url: `Public Search (${companyName})`,
-      reason: (searchErr as Error).message || "Public discussion search failed",
+      reason:
+        (discussionSettled.reason as Error)?.message ||
+        "Public discussion search failed",
     });
   }
 
   // --------------------------------------------------------------------------
   // Stage 4: Company Brief Synthesis (LLM)
   // --------------------------------------------------------------------------
-  await onProgress("generating_brief", 55, "Synthesizing company brief and culture insights");
-  logger.info("Pipeline stage 4: Company Brief Synthesis");
+  await onProgress(
+    "generating_brief",
+    50,
+    "Synthesizing company brief and culture insights"
+  );
+  logger.info({ generationId }, "Pipeline stage 4: Company Brief Synthesis");
 
   const briefPrompt = buildCompanyBriefPrompt(
     companyName,
     crawlPages,
     publicDiscussion.findings
   );
-  let companyBrief = await llm.generateStructured<CompanyBrief>(
+  const companyBrief = await llm.generateStructured<CompanyBrief>(
     briefPrompt,
-    CompanyBriefOutputSchema
+    CompanyBriefOutputSchema,
+    llmContext
   );
 
   // Guarantee companyBrief has at least rootUrl in sources if none returned
@@ -229,18 +348,28 @@ export async function runGenerationPipeline(
     companyBrief.sources = [urlValidation.normalizedUrl];
   }
 
-  // If the JD was very short (e.g. 2 lines), ensure honest notice
-  if (normalizedJd.charCount < 180 && !companyBrief.summary.includes("limited source information")) {
+  // If the JD was concise (thin-JD notice check preserved)
+  if (
+    normalizedJd.charCount < 180 &&
+    !companyBrief.summary.includes("limited source information")
+  ) {
     companyBrief.summary = `${companyBrief.summary} (Note: Prepared from a concise job posting with limited source information.)`;
   }
 
   // --------------------------------------------------------------------------
-  // Stage 5: Category-Specific Question Generation (LLM)
+  // Stage 5: Category-Specific Question Generation (Bounded Concurrency & Deterministic Merge)
+  // Phase 3B: Categories executed with bounded parallel limit (MAX_CONCURRENT_LLM_CALLS = 2)
   // --------------------------------------------------------------------------
-  await onProgress("generating_questions", 65, "Generating categorized interview questions");
-  logger.info("Pipeline stage 5: Category-Specific Question Generation");
+  await onProgress(
+    "generating_questions",
+    65,
+    "Generating categorized interview questions (bounded parallel)"
+  );
+  logger.info(
+    { generationId, concurrency: llmConcurrency },
+    "Pipeline stage 5: Category-Specific Question Generation"
+  );
 
-  const allQuestions: Question[] = [];
   const categories: QuestionCategory[] = [
     "technical",
     "system-design",
@@ -248,17 +377,21 @@ export async function runGenerationPipeline(
     "company-fit",
   ];
 
-  let questionCounter = 1;
-
-  for (const category of categories) {
+  const categoryTasks = categories.map((category) => {
     // Select requirements most aligned with this category
     let categoryReqs = roleOutput.requirements;
     if (category === "technical") {
-      categoryReqs = roleOutput.requirements.filter((r) => r.kind === "technical" || r.kind === "domain");
+      categoryReqs = roleOutput.requirements.filter(
+        (r) => r.kind === "technical" || r.kind === "domain"
+      );
     } else if (category === "behavioural") {
-      categoryReqs = roleOutput.requirements.filter((r) => r.kind === "behavioural" || r.priority === "must");
+      categoryReqs = roleOutput.requirements.filter(
+        (r) => r.kind === "behavioural" || r.priority === "must"
+      );
     } else if (category === "system-design") {
-      categoryReqs = roleOutput.requirements.filter((r) => r.kind === "technical");
+      categoryReqs = roleOutput.requirements.filter(
+        (r) => r.kind === "technical"
+      );
     }
 
     if (categoryReqs.length === 0) {
@@ -272,32 +405,55 @@ export async function runGenerationPipeline(
       seniority: roleOutput.seniority,
       companyName,
       companySummary: companyBrief.summary,
-      startQuestionNumber: questionCounter,
+      startQuestionNumber: 1, // Final IDs will be assigned sequentially in deterministic merge
     });
 
-    try {
-      const qResult = await llm.generateStructured<CategoryQuestionsOutput>(
-        qPrompt,
-        CategoryQuestionsOutputSchema
-      );
-      for (const q of qResult.questions) {
-        // Enforce valid requirement reference check
-        const validReqIds = q.requirement_ids.filter((id) =>
-          roleOutput.requirements.some((r) => r.id === id)
+    return llmLimiter(async () => {
+      try {
+        const qResult = await llm.generateStructured<CategoryQuestionsOutput>(
+          qPrompt,
+          CategoryQuestionsOutputSchema,
+          llmContext
         );
-        if (validReqIds.length === 0 && roleOutput.requirements.length > 0) {
-          validReqIds.push(roleOutput.requirements[0].id);
-        }
-
-        allQuestions.push({
-          ...q,
-          id: `q${questionCounter++}`,
-          category,
-          requirement_ids: validReqIds,
-        });
+        return { category, questions: qResult.questions };
+      } catch (catErr) {
+        logger.error(
+          { generationId, category, catErr },
+          "Failed generating category questions"
+        );
+        return { category, questions: [] };
       }
-    } catch (catErr) {
-      logger.error({ category, catErr }, "Failed generating category questions");
+    });
+  });
+
+  const categoryResults = await Promise.all(categoryTasks);
+
+  // --------------------------------------------------------------------------
+  // Phase 16: Deterministic Merging
+  // Strictly sort/merge results in canonical category order regardless of completion order
+  // --------------------------------------------------------------------------
+  const allQuestions: Question[] = [];
+  let questionCounter = 1;
+
+  for (const cat of categories) {
+    const result = categoryResults.find((r) => r.category === cat);
+    if (!result || result.questions.length === 0) continue;
+
+    for (const q of result.questions) {
+      // Enforce valid requirement reference check
+      const validReqIds = q.requirement_ids.filter((id) =>
+        roleOutput.requirements.some((r) => r.id === id)
+      );
+      if (validReqIds.length === 0 && roleOutput.requirements.length > 0) {
+        validReqIds.push(roleOutput.requirements[0].id);
+      }
+
+      allQuestions.push({
+        ...q,
+        id: `q${questionCounter++}`,
+        category: cat,
+        requirement_ids: validReqIds,
+      });
     }
   }
 
@@ -323,25 +479,38 @@ export async function runGenerationPipeline(
         requirement_ids: [req.id],
         category: req.kind === "behavioural" ? "behavioural" : "technical",
         prompt: `Explain your practical experience and depth regarding ${req.text}.`,
-        answer_outline: "Discuss foundational principles, specific projects, trade-offs, and lessons learned.",
+        answer_outline:
+          "Discuss foundational principles, specific projects, trade-offs, and lessons learned.",
         difficulty: req.priority === "must" ? 2 : 1,
       });
     });
   }
 
   // --------------------------------------------------------------------------
-  // Stage 6: Deterministic Coverage Checking & Targeted Second Pass
+  // Stage 6: Deterministic Coverage Checking & Targeted Second Pass (Sequential/Dependent)
+  // Phase 3C: Second pass MUST remain strictly dependent on the first pass coverage result
   // --------------------------------------------------------------------------
-  await onProgress("checking_coverage", 80, "Evaluating requirement coverage and closing gaps");
-  logger.info("Pipeline stage 6: Deterministic Coverage Checking");
+  await onProgress(
+    "checking_coverage",
+    80,
+    "Evaluating requirement coverage and closing gaps"
+  );
+  logger.info({ generationId }, "Pipeline stage 6: Deterministic Coverage Checking");
 
   let coveragePass = 1;
-  let coverage = checkRequirementCoverage(roleOutput.requirements, allQuestions);
+  let coverage = checkRequirementCoverage(
+    roleOutput.requirements,
+    allQuestions
+  );
 
   while (!coverage.isMustCovered && coveragePass < maxCoveragePasses) {
     coveragePass++;
     logger.info(
-      { pass: coveragePass, mustMissing: coverage.mustUncoveredRequirementIds },
+      {
+        generationId,
+        pass: coveragePass,
+        mustMissing: coverage.mustUncoveredRequirementIds,
+      },
       "Closing coverage gaps with targeted second pass"
     );
 
@@ -359,10 +528,12 @@ export async function runGenerationPipeline(
     });
 
     try {
-      const targetedResult = await llm.generateStructured<TargetedQuestionsOutput>(
-        targetedPrompt,
-        TargetedQuestionsOutputSchema
-      );
+      const targetedResult =
+        await llm.generateStructured<TargetedQuestionsOutput>(
+          targetedPrompt,
+          TargetedQuestionsOutputSchema,
+          llmContext
+        );
 
       for (const q of targetedResult.questions) {
         allQuestions.push({
@@ -371,31 +542,45 @@ export async function runGenerationPipeline(
         });
       }
 
-      coverage = checkRequirementCoverage(roleOutput.requirements, allQuestions);
+      coverage = checkRequirementCoverage(
+        roleOutput.requirements,
+        allQuestions
+      );
     } catch (targetedErr) {
-      logger.warn({ targetedErr }, "Targeted coverage generation encountered error");
+      logger.warn(
+        { generationId, targetedErr },
+        "Targeted coverage generation encountered error"
+      );
       break;
     }
   }
 
-  // Mandatory Must-Have Coverage Gate: Kit fails if must-have requirements remain uncovered
+  // Mandatory Must-Have Coverage Gate (Phase 14): Kit fails if must-have requirements remain uncovered
   if (!coverage.isMustCovered) {
     logger.error(
-      { uncovered: coverage.mustUncoveredRequirementIds },
+      { generationId, uncovered: coverage.mustUncoveredRequirementIds },
       "Must-have requirements remain uncovered after all allowed passes"
     );
     throw new AppError(
       500,
       "MUST_REQUIREMENTS_UNCOVERED",
-      `Unable to cover all must-have requirements after allowed generation passes (${maxCoveragePasses} passes). Uncovered: ${coverage.mustUncoveredRequirementIds.join(", ")}`
+      `Unable to cover all must-have requirements after allowed generation passes (${maxCoveragePasses} passes). Uncovered: ${coverage.mustUncoveredRequirementIds.join(", ")}`,
+      {
+        uncoveredMustRequirements: coverage.mustUncoveredRequirementIds,
+        passes: coveragePass,
+      }
     );
   }
 
   // --------------------------------------------------------------------------
   // Stage 7: Flashcard Generation (LLM)
   // --------------------------------------------------------------------------
-  await onProgress("generating_flashcards", 88, "Generating active-recall flashcards");
-  logger.info("Pipeline stage 7: Flashcard Generation");
+  await onProgress(
+    "generating_flashcards",
+    88,
+    "Generating active-recall flashcards"
+  );
+  logger.info({ generationId }, "Pipeline stage 7: Flashcard Generation");
 
   let flashcards: Flashcard[] = [];
   try {
@@ -406,12 +591,15 @@ export async function runGenerationPipeline(
     });
     const flashcardResult = await llm.generateStructured<FlashcardsOutput>(
       flashcardPrompt,
-      FlashcardsOutputSchema
+      FlashcardsOutputSchema,
+      llmContext
     );
     flashcards = flashcardResult.flashcards;
   } catch (flashErr) {
-    logger.warn({ flashErr }, "Flashcard generation fallback applied");
-    // Generate deterministic flashcards from questions
+    logger.warn(
+      { generationId, flashErr },
+      "Flashcard generation fallback applied"
+    );
     flashcards = allQuestions.slice(0, 6).map((q, idx) => ({
       id: `f${idx + 1}`,
       front: q.prompt,
@@ -423,16 +611,31 @@ export async function runGenerationPipeline(
   // --------------------------------------------------------------------------
   // Stage 8: Deterministic Schedule Allocation
   // --------------------------------------------------------------------------
-  await onProgress("building_schedule", 95, "Allocating deterministic study schedule");
-  logger.info({ daysAvailable }, "Pipeline stage 8: Deterministic Schedule Allocation");
+  await onProgress(
+    "building_schedule",
+    95,
+    "Allocating deterministic study schedule"
+  );
+  logger.info(
+    { generationId, daysAvailable },
+    "Pipeline stage 8: Deterministic Schedule Allocation"
+  );
 
-  const schedule = allocateSchedule(daysAvailable, allQuestions, roleOutput.requirements);
+  const schedule = allocateSchedule(
+    daysAvailable,
+    allQuestions,
+    roleOutput.requirements
+  );
 
   // --------------------------------------------------------------------------
   // Stage 9: Final Assembly & Structure Validation
   // --------------------------------------------------------------------------
-  await onProgress("validating_kit", 98, "Validating kit structure and reference integrity");
-  logger.info("Pipeline stage 9: Final Structure Validation");
+  await onProgress(
+    "validating_kit",
+    98,
+    "Validating kit structure and reference integrity"
+  );
+  logger.info({ generationId }, "Pipeline stage 9: Final Structure Validation");
 
   const pagesUsed = crawlPages.map((p) => p.url);
   if (pagesUsed.length === 0) {
@@ -485,9 +688,14 @@ export async function runGenerationPipeline(
   };
 
   // Enforce mandatory must-coverage in final validation
-  const validation = validateKitStructure(finalKit, { requireMustCoverage: true });
+  const validation = validateKitStructure(finalKit, {
+    requireMustCoverage: true,
+  });
   if (!validation.isValid) {
-    logger.error({ errors: validation.errors }, "Generated kit failed structure validation");
+    logger.error(
+      { generationId, errors: validation.errors },
+      "Generated kit failed structure validation"
+    );
     throw new AppError(
       500,
       "KIT_VALIDATION_FAILED",
@@ -496,7 +704,10 @@ export async function runGenerationPipeline(
   }
 
   await onProgress("completed", 100, "Interview preparation kit ready");
-  logger.info("Kit generation completed successfully");
+  logger.info(
+    { generationId, llmCallsMade: llmCallCount },
+    "Kit generation completed successfully"
+  );
 
   return finalKit;
 }

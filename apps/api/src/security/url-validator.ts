@@ -67,7 +67,10 @@ export function isPrivateOrForbiddenIp(ip: string): boolean {
  * Validates and normalizes an external URL.
  * Protects against SSRF, cloud metadata access, and malicious protocols.
  */
-export function validateAndNormalizeUrl(rawUrl: string): UrlValidationResult {
+export function validateAndNormalizeUrl(
+  rawUrl: string,
+  allowLocalFetch = env.ALLOW_LOCAL_FETCH
+): UrlValidationResult {
   if (!rawUrl || typeof rawUrl !== "string") {
     return { isValid: false, error: "URL is empty or not a string" };
   }
@@ -97,15 +100,24 @@ export function validateAndNormalizeUrl(rawUrl: string): UrlValidationResult {
 
   const hostname = parsed.hostname.toLowerCase();
 
-  // Explicit host checks
-  if (!env.ALLOW_LOCAL_FETCH) {
+  // Cloud metadata and link-local are ALWAYS forbidden
+  if (
+    hostname === "169.254.169.254" ||
+    hostname === "metadata.google.internal" ||
+    hostname.endsWith(".internal")
+  ) {
+    return {
+      isValid: false,
+      error: `Access to private or metadata host '${hostname}' is forbidden`,
+    };
+  }
+
+  // Explicit host checks for local/private environments
+  if (!allowLocalFetch) {
     if (
       hostname === "localhost" ||
       hostname.endsWith(".localhost") ||
-      hostname.endsWith(".local") ||
-      hostname.endsWith(".internal") ||
-      hostname === "metadata.google.internal" ||
-      hostname === "169.254.169.254"
+      hostname.endsWith(".local")
     ) {
       return {
         isValid: false,

@@ -1,5 +1,7 @@
 import { defaultSearchProvider, type SearchProvider, type SearchResultItem } from "./search-provider.js";
 import { logger } from "../utils/logger.js";
+import { researchCacheRepository } from "../repositories/research-cache.repository.js";
+import { sha256 } from "../utils/hash.js";
 
 export interface PublicInterviewResearch {
   company: string;
@@ -10,6 +12,7 @@ export interface PublicInterviewResearch {
 
 /**
  * Researches public discussion about the company's hiring and interview process.
+ * Integrates MongoDB research caching and in-flight deduplication.
  * 
  * Rules:
  * - Separates public discussion from official company website facts
@@ -30,6 +33,24 @@ export async function researchPublicInterviewDiscussion(
     };
   }
 
+  // Only engage persistent research cache for production/default provider
+  if (provider === defaultSearchProvider) {
+    const cacheKey = sha256(`public_discussion::${cleanCompany.toLowerCase()}::v1`);
+    const { data } = await researchCacheRepository.getOrFetch<PublicInterviewResearch>(
+      cacheKey,
+      "public_discussion",
+      () => performSearch(cleanCompany, provider)
+    );
+    return data;
+  }
+
+  return performSearch(cleanCompany, provider);
+}
+
+async function performSearch(
+  cleanCompany: string,
+  provider: SearchProvider
+): Promise<PublicInterviewResearch> {
   const queries = [
     `"${cleanCompany}" interview process experience`,
     `"${cleanCompany}" technical interview questions`,

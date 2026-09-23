@@ -56,16 +56,33 @@ export class KitService {
       }
     }
 
-    const kitDoc = await kitRepository.create({
-      userId,
-      input: {
-        jd: input.jd,
-        company_url: input.company_url,
-        days: safeDays,
-      },
-      inputHash,
-      status: "running",
-    });
+    let kitDoc: KitDoc;
+    try {
+      kitDoc = await kitRepository.create({
+        userId,
+        input: {
+          jd: input.jd,
+          company_url: input.company_url,
+          days: safeDays,
+        },
+        inputHash,
+        status: "running",
+      });
+    } catch (err: unknown) {
+      // Handle MongoDB E11000 duplicate key collision for concurrent active jobs
+      const isDuplicate =
+        (err as { code?: number })?.code === 11000 ||
+        ((err as Error)?.message || "").includes("E11000");
+      if (isDuplicate) {
+        logger.info(
+          { userId, inputHash },
+          "Concurrent active job detected via unique index; returning active job"
+        );
+        const active = await kitRepository.findActiveOrCompleted(userId, inputHash);
+        if (active) return active;
+      }
+      throw err;
+    }
 
     const runner = async () => {
       try {
@@ -109,6 +126,7 @@ export class KitService {
           error: {
             code: appErr.code || "GENERATION_FAILED",
             message: appErr.message || "An error occurred during generation",
+            details: appErr.details,
           },
           completedAt: new Date(),
         });

@@ -66,11 +66,24 @@ async function ensureIndexes(database: Db): Promise<void> {
     await kits.createIndex({ userId: 1, updatedAt: -1 });
     await kits.createIndex({ userId: 1, inputHash: 1 });
     await kits.createIndex({ userId: 1, inputHash: 1, status: 1 });
+    // Unique index for active generation jobs (prevents concurrent duplicate jobs for same user & input)
+    await kits.createIndex(
+      { userId: 1, inputHash: 1 },
+      {
+        unique: true,
+        partialFilterExpression: { status: { $in: ["running", "queued"] } },
+      }
+    );
 
     // Practice attempts collection
     const attempts = database.collection("practice_attempts");
     await attempts.createIndex({ kitId: 1, flashcardId: 1 });
     await attempts.createIndex({ userId: 1, kitId: 1 });
+
+    // Research cache collection
+    const researchCache = database.collection("research_cache");
+    await researchCache.createIndex({ key: 1 }, { unique: true });
+    await researchCache.createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }); // TTL index
 
     logger.info("MongoDB indexes verified");
   } catch (error) {

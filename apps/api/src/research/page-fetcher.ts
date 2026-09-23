@@ -25,17 +25,18 @@ const MAX_REDIRECTS = 5;
  */
 export async function fetchWebPage(
   initialUrl: string,
-  options: { timeoutMs?: number; maxBytes?: number } = {}
+  options: { timeoutMs?: number; maxBytes?: number; allowLocalFetch?: boolean } = {}
 ): Promise<FetchResult> {
   const timeoutMs = options.timeoutMs ?? env.CRAWL_TIMEOUT_MS ?? DEFAULT_TIMEOUT_MS;
   const maxBytes = options.maxBytes ?? env.MAX_PAGE_BYTES ?? 2 * 1024 * 1024;
+  const allowLocalFetch = options.allowLocalFetch ?? env.ALLOW_LOCAL_FETCH;
 
   let currentUrl = initialUrl;
   let redirectCount = 0;
 
   while (redirectCount <= MAX_REDIRECTS) {
     // 1. Validate URL syntax and protocol
-    const urlValidation = validateAndNormalizeUrl(currentUrl);
+    const urlValidation = validateAndNormalizeUrl(currentUrl, allowLocalFetch);
     if (!urlValidation.isValid || !urlValidation.normalizedUrl) {
       return {
         url: initialUrl,
@@ -49,7 +50,7 @@ export async function fetchWebPage(
 
     // 2. Perform DNS resolution and check against private/metadata IPs
     const parsed = new URL(currentUrl);
-    const hostValidation = await validateHostResolution(parsed.hostname);
+    const hostValidation = await validateHostResolution(parsed.hostname, allowLocalFetch);
     if (!hostValidation.isValid) {
       logger.warn(
         { url: currentUrl, error: hostValidation.error },
