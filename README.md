@@ -77,7 +77,7 @@ Job Description + Company Website URL + Days Available
 | **Language** | TypeScript (Strict Mode) | Full type safety across packages, shared schemas, and API contracts. |
 | **Validation** | Zod | Runtime schema validation for inputs, LLM outputs, kit contracts, and batch evaluation. |
 | **Testing** | Vitest | Extremely fast, native TypeScript test execution with watch mode and v8 coverage. |
-| **LLM Adapter** | Google Gemini (`gemini-2.0-flash`) | High quality, structured JSON mode, genuine free-tier compatibility. |
+| **LLM Adapter** | Google Gemini (`gemini-3.6-flash`) | High quality, structured JSON mode, genuine free-tier compatibility. |
 | **Search Provider** | SerpAPI (with fallback abstraction) | Live public interview discussion search without vendor lock-in. |
 
 ---
