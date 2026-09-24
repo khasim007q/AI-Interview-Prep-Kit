@@ -16,13 +16,19 @@ export interface SearchProvider {
  * SerpAPI implementation of SearchProvider.
  */
 export class SerpApiSearchProvider implements SearchProvider {
-  constructor(private apiKey: string = env.SERPAPI_API_KEY || "") {}
+  constructor(
+    private apiKey: string = env.SERPAPI_API_KEY || "",
+    private timeoutMs: number = env.SEARCH_TIMEOUT_MS || 8000
+  ) {}
 
   async search(query: string, maxResults = 5): Promise<SearchResultItem[]> {
     if (!this.apiKey) {
       logger.warn("SERPAPI_API_KEY is not configured; skipping live web search");
       return [];
     }
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
 
     try {
       const url = new URL("https://serpapi.com/search.json");
@@ -33,6 +39,7 @@ export class SerpApiSearchProvider implements SearchProvider {
 
       const res = await fetch(url.toString(), {
         headers: { Accept: "application/json" },
+        signal: controller.signal,
       });
 
       if (!res.ok) {
@@ -59,8 +66,22 @@ export class SerpApiSearchProvider implements SearchProvider {
         sourceType: "public-discussion",
       }));
     } catch (error) {
-      logger.warn({ error, query }, "Error executing SerpAPI search");
+      const isTimeout =
+        controller.signal.aborted ||
+        (error as Error)?.name === "AbortError" ||
+        ((error as Error)?.message || "").toLowerCase().includes("abort");
+
+      if (isTimeout) {
+        logger.warn(
+          { query, timeoutMs: this.timeoutMs },
+          "Public search request timed out; treating as recoverable empty result"
+        );
+      } else {
+        logger.warn({ error, query }, "Error executing SerpAPI search");
+      }
       return [];
+    } finally {
+      clearTimeout(timer);
     }
   }
 }

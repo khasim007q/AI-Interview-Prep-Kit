@@ -33,10 +33,17 @@ export async function apiClient<T>(
   const cleanEndpoint = endpoint.startsWith("/") ? endpoint : `/${endpoint}`;
   const url = `${API_BASE_URL}${cleanEndpoint}`;
 
-  const defaultHeaders: HeadersInit = {
-    "Content-Type": "application/json",
+  const method = (options.method || "GET").toUpperCase();
+  const hasBody = options.body !== undefined && options.body !== null;
+
+  const defaultHeaders: Record<string, string> = {
     Accept: "application/json",
   };
+
+  // Only send Content-Type when there is a payload to prevent triggering unnecessary CORS preflight OPTIONS requests
+  if (hasBody || (method !== "GET" && method !== "HEAD")) {
+    defaultHeaders["Content-Type"] = "application/json";
+  }
 
   const config: RequestInit = {
     ...options,

@@ -178,6 +178,28 @@ export class KitService {
     return doc;
   }
 
+  /**
+   * Returns lightweight generation status using MongoDB projection.
+   * Invariant: Strictly read-only; never invokes LLM, crawler, search, or pipeline.
+   */
+  async getGenerationStatus(kitId: string, userId: string) {
+    const doc = await kitRepository.findGenerationStatus(kitId, userId);
+    if (!doc) {
+      throw new AppError(404, "KIT_NOT_FOUND", "Kit not found or access unauthorized");
+    }
+
+    return {
+      id: doc._id.toString(),
+      status: doc.status,
+      stage: doc.generation?.stage || "starting",
+      progress: doc.generation?.progress ?? 0,
+      message: doc.generation?.message || "",
+      error: doc.generation?.error || null,
+      generation: doc.generation,
+      updatedAt: doc.updatedAt.toISOString(),
+    };
+  }
+
   async listKits(userId: string): Promise<KitDoc[]> {
     return kitRepository.findByUserId(userId);
   }

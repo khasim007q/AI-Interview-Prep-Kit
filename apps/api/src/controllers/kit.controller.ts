@@ -92,12 +92,9 @@ export class KitController {
     try {
       const userId = req.user!.id;
       const kitId = getParam(req.params.kitId);
-      const kitDoc = await kitService.getKit(kitId, userId);
+      const statusData = await kitService.getGenerationStatus(kitId, userId);
 
-      res.status(200).json({
-        status: kitDoc.status,
-        generation: kitDoc.generation,
-      });
+      res.status(200).json(statusData);
     } catch (error) {
       next(error);
     }

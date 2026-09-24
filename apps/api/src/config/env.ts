@@ -36,6 +36,7 @@ const EnvSchema = z.object({
   // Public Search Provider
   SEARCH_PROVIDER: z.string().default("serpapi"),
   SERPAPI_API_KEY: z.string().optional(),
+  SEARCH_TIMEOUT_MS: z.coerce.number().default(8000),
 
   // Frontend URL
   FRONTEND_URL: z.string().default("http://localhost:3000"),

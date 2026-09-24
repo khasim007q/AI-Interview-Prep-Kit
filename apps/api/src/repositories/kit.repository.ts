@@ -88,6 +88,28 @@ export class KitRepository {
     return this.collection.findOne({ _id: kitObjId, userId: userObjId });
   }
 
+  /**
+   * Lightweight projection for status polling.
+   * Avoids querying or serializing large questions, flashcards, schedule, and research bodies.
+   */
+  async findGenerationStatus(
+    kitId: string | ObjectId,
+    userId: string | ObjectId
+  ): Promise<Pick<KitDoc, "_id" | "status" | "generation" | "updatedAt"> | null> {
+    const kitObjId = typeof kitId === "string" ? new ObjectId(kitId) : kitId;
+    const userObjId = typeof userId === "string" ? new ObjectId(userId) : userId;
+    return this.collection.findOne(
+      { _id: kitObjId, userId: userObjId },
+      {
+        projection: {
+          status: 1,
+          generation: 1,
+          updatedAt: 1,
+        },
+      }
+    ) as Promise<Pick<KitDoc, "_id" | "status" | "generation" | "updatedAt"> | null>;
+  }
+
   async findById(kitId: string | ObjectId): Promise<KitDoc | null> {
     const kitObjId = typeof kitId === "string" ? new ObjectId(kitId) : kitId;
     return this.collection.findOne({ _id: kitObjId });

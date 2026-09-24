@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useState } from "react";
+import { use, useState, useRef, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -26,6 +26,22 @@ import { ScheduleSection } from "@/components/kit/ScheduleSection";
 import { WeakSpotsReport } from "@/components/kit/WeakSpotsReport";
 import { ResearchEvidenceView } from "@/components/kit/ResearchEvidenceView";
 import { PracticeModal } from "@/components/kit/PracticeModal";
+
+interface GenerationStatusResponse {
+  id: string;
+  status: "queued" | "running" | "completed" | "failed" | "cancelled";
+  stage: string;
+  progress: number;
+  message?: string;
+  error?: { code: string; message: string } | null;
+  generation?: {
+    stage: string;
+    progress: number;
+    message?: string;
+    error?: { code: string; message: string } | null;
+  };
+  updatedAt: string;
+}
 
 interface KitResponse {
   id: string;
@@ -68,14 +84,57 @@ export default function KitDetailPage({
   // Regeneration notification message
   const [regenNotice, setRegenNotice] = useState<string | null>(null);
 
-  // Query Kit
-  const { data, isLoading, error, refetch } = useQuery<KitResponse>({
-    queryKey: ["kit", kitId],
-    queryFn: () => apiClient(`/kits/${kitId}`),
+  const pollStartTimeRef = useRef<number>(Date.now());
+
+  // 1. Lightweight Status Query: Polls /generation-status during active generation
+  const statusQuery = useQuery<GenerationStatusResponse>({
+    queryKey: ["kit-status", kitId],
+    queryFn: () => apiClient(`/kits/${kitId}/generation-status`),
     refetchInterval: (query) => {
       const status = query.state.data?.status;
-      return status === "running" || status === "queued" ? 1500 : false;
+      // Stop immediately on terminal states
+      if (!status || (status !== "running" && status !== "queued")) {
+        return false;
+      }
+
+      // Pause polling when browser tab is hidden to save battery and network
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+        return false;
+      }
+
+      // Adaptive polling based on elapsed generation time
+      const elapsed = Date.now() - pollStartTimeRef.current;
+      if (elapsed < 15000) return 2000;
+      if (elapsed < 45000) return 3000;
+      if (elapsed < 90000) return 5000;
+      return 8000;
     },
+  });
+
+  // Re-fetch immediately when user returns to a visible tab if generation was in progress
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (typeof document !== "undefined" && document.visibilityState === "visible") {
+        const currentStatus = statusQuery.data?.status;
+        if (!currentStatus || currentStatus === "running" || currentStatus === "queued") {
+          statusQuery.refetch();
+        }
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [statusQuery]);
+
+  const isCompleted = statusQuery.data?.status === "completed";
+
+  // 2. Full Kit Query: Only fetches full representation ONCE generation has completed
+  const { data, isLoading: isKitLoading, error: kitError, refetch } = useQuery<KitResponse>({
+    queryKey: ["kit", kitId],
+    queryFn: () => apiClient(`/kits/${kitId}`),
+    enabled: isCompleted,
+    staleTime: 30000,
   });
 
   // Query Practice Summary
@@ -84,7 +143,7 @@ export default function KitDetailPage({
   }>({
     queryKey: ["practice-summary", kitId],
     queryFn: () => apiClient(`/kits/${kitId}/practice/summary`),
-    enabled: data?.status === "completed",
+    enabled: isCompleted && !!data?.kit,
   });
 
   const handleMutationError = (err: unknown) => {
@@ -295,7 +354,8 @@ export default function KitDetailPage({
     }
   };
 
-  if (isLoading) {
+  // Initial loading state while querying status or loading completed kit
+  if (statusQuery.isLoading || (isCompleted && isKitLoading)) {
     return (
       <div className="min-h-screen bg-slate-50 flex flex-col">
         <Navbar />
@@ -306,7 +366,8 @@ export default function KitDetailPage({
     );
   }
 
-  if (error || !data) {
+  // Not found or query error
+  if (statusQuery.error || (isCompleted && (kitError || !data?.kit))) {
     return (
       <div className="min-h-screen bg-slate-50 flex flex-col">
         <Navbar />
@@ -327,21 +388,34 @@ export default function KitDetailPage({
     );
   }
 
-  // Generation In-Progress, Failed, or Cancelled
-  if (data.status === "running" || data.status === "queued" || data.status === "failed" || data.status === "cancelled") {
+  const currentStatus = statusQuery.data?.status;
+
+  // Generation In-Progress, Failed, or Cancelled (served from lightweight status query)
+  if (
+    currentStatus === "running" ||
+    currentStatus === "queued" ||
+    currentStatus === "failed" ||
+    currentStatus === "cancelled"
+  ) {
+    const genMeta = statusQuery.data?.generation || {
+      stage: statusQuery.data?.stage || "starting",
+      progress: statusQuery.data?.progress ?? 5,
+      message: statusQuery.data?.message,
+      error: statusQuery.data?.error,
+    };
     return (
       <div className="min-h-screen bg-slate-50 flex flex-col">
         <Navbar />
         <GenerationProgressView
-          status={data.status}
-          generation={data.generation}
+          status={currentStatus}
+          generation={genMeta}
           onRetry={() => router.push("/kits/new")}
         />
       </div>
     );
   }
 
-  const kit = data.kit!;
+  const kit = data!.kit!;
 
   const TAB_ITEMS = [
     { id: "overview", label: "Overview & Role" },

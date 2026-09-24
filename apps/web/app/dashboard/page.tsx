@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -46,9 +47,26 @@ export default function DashboardPage() {
       const hasRunning = query.state.data?.kits.some(
         (k) => k.status === "running" || k.status === "queued"
       );
-      return hasRunning ? 2000 : false;
+      if (!hasRunning) return false;
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+        return false;
+      }
+      return 3000;
     },
   });
+
+  // Re-fetch immediately when user returns to dashboard tab
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (typeof document !== "undefined" && document.visibilityState === "visible") {
+        queryClient.invalidateQueries({ queryKey: ["kits"] });
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [queryClient]);
 
   const deleteMutation = useMutation({
     mutationFn: (kitId: string) =>

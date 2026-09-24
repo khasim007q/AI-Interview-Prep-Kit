@@ -12,6 +12,9 @@ kitsRouter.use(requireAuth);
 kitsRouter.post("/", (req, res, next) => kitController.createKit(req, res, next));
 kitsRouter.get("/", (req, res, next) => kitController.listKits(req, res, next));
 kitsRouter.get("/:kitId", (req, res, next) => kitController.getKit(req, res, next));
+kitsRouter.get("/:kitId/generation-status", (req, res, next) =>
+  kitController.getGenerationStatus(req, res, next)
+);
 kitsRouter.get("/:kitId/generation", (req, res, next) =>
   kitController.getGenerationStatus(req, res, next)
 );
