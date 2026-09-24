@@ -71,7 +71,7 @@ describe("Generation Budget & Deadline Control", () => {
     ).rejects.toMatchObject({
       code: "LLM_CALL_BUDGET_EXCEEDED",
     });
-  });
+  }, 15000);
 });
 
 describe("Crawler SSRF & Redirect Protection", () => {

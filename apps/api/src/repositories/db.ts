@@ -64,12 +64,20 @@ async function ensureIndexes(database: Db): Promise<void> {
     // Kits collection
     const kits = database.collection("kits");
     await kits.createIndex({ userId: 1, updatedAt: -1 });
-    await kits.createIndex({ userId: 1, inputHash: 1 });
     await kits.createIndex({ userId: 1, inputHash: 1, status: 1 });
+
+    // Drop legacy non-unique userId_1_inputHash_1 index if it exists from previous migrations
+    try {
+      await kits.dropIndex("userId_1_inputHash_1");
+    } catch {
+      // Ignore if index does not exist
+    }
+
     // Unique index for active generation jobs (prevents concurrent duplicate jobs for same user & input)
     await kits.createIndex(
       { userId: 1, inputHash: 1 },
       {
+        name: "unique_active_generation_per_user_input",
         unique: true,
         partialFilterExpression: { status: { $in: ["running", "queued"] } },
       }

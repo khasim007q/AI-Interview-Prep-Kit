@@ -15,6 +15,9 @@ kitsRouter.get("/:kitId", (req, res, next) => kitController.getKit(req, res, nex
 kitsRouter.get("/:kitId/generation", (req, res, next) =>
   kitController.getGenerationStatus(req, res, next)
 );
+kitsRouter.post("/:kitId/cancel", (req, res, next) =>
+  kitController.cancelKit(req, res, next)
+);
 kitsRouter.patch("/:kitId", (req, res, next) => kitController.updateKit(req, res, next));
 kitsRouter.delete("/:kitId", (req, res, next) => kitController.deleteKit(req, res, next));
 

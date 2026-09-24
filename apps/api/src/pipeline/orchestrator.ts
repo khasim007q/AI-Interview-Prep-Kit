@@ -48,10 +48,17 @@ import {
 } from "../ai/prompts/generate-flashcards.prompt.js";
 import { AppError } from "../middleware/error.middleware.js";
 import { logger } from "../utils/logger.js";
-import { createLimiter } from "../utils/limiter.js";
+import { createLimiter, type Limiter } from "../utils/limiter.js";
 import { researchCacheRepository } from "../repositories/research-cache.repository.js";
 import { sha256 } from "../utils/hash.js";
 import { env } from "../config/env.js";
+
+/**
+ * Process-wide global LLM concurrency limiter across all pipeline generation jobs.
+ */
+export const globalPipelineLlmLimiter: Limiter = createLimiter(
+  env.MAX_CONCURRENT_LLM_CALLS ?? env.LLM_CONCURRENCY ?? 2
+);
 
 export type PipelineStage =
   | "validation"
@@ -87,6 +94,8 @@ export interface PipelineOptions {
   maxGenerationTimeMs?: number;
   maxLlmCalls?: number;
   llmConcurrency?: number;
+  llmLimiter?: Limiter;
+  signal?: AbortSignal;
 }
 
 /**
@@ -110,8 +119,6 @@ export async function runGenerationPipeline(
     options.maxLlmCalls ?? env.MAX_LLM_CALLS_PER_GENERATION ?? 12;
   const maxCoveragePasses =
     options.maxCoveragePasses ?? env.MAX_COVERAGE_PASSES ?? 2;
-  const llmConcurrency =
-    options.llmConcurrency ?? env.MAX_CONCURRENT_LLM_CALLS ?? 2;
 
   let llmCallCount = 0;
   const llmContext: GenerationContext = {
@@ -124,11 +131,25 @@ export async function runGenerationPipeline(
     incrementCallCount() {
       llmCallCount++;
     },
+    signal: options.signal,
   };
 
   const llm = options.llmProvider || defaultLLMProvider;
   const onProgress = options.onProgress || (() => {});
-  const llmLimiter = createLimiter(llmConcurrency);
+  // Use global API process-wide limiter unless overridden with custom instance or concurrency
+  const llmLimiter =
+    options.llmLimiter ??
+    (options.llmConcurrency !== undefined
+      ? createLimiter(options.llmConcurrency)
+      : globalPipelineLlmLimiter);
+
+  function checkAbort(): void {
+    if (options.signal?.aborted) {
+      throw new AppError(499, "GENERATION_CANCELLED", "Generation was cancelled");
+    }
+  }
+
+  checkAbort();
 
   logger.info(
     {
@@ -205,10 +226,13 @@ export async function runGenerationPipeline(
     );
     roleOutput = cachedExtract;
   } else {
-    roleOutput = await llm.generateStructured<ExtractedRoleOutput>(
-      reqPrompt,
-      ExtractedRoleOutputSchema,
-      llmContext
+    checkAbort();
+    roleOutput = await llmLimiter(() =>
+      llm.generateStructured<ExtractedRoleOutput>(
+        reqPrompt,
+        ExtractedRoleOutputSchema,
+        llmContext
+      )
     );
     await researchCacheRepository.set(
       extractCacheKey,
@@ -332,15 +356,18 @@ export async function runGenerationPipeline(
   );
   logger.info({ generationId }, "Pipeline stage 4: Company Brief Synthesis");
 
+  checkAbort();
   const briefPrompt = buildCompanyBriefPrompt(
     companyName,
     crawlPages,
     publicDiscussion.findings
   );
-  const companyBrief = await llm.generateStructured<CompanyBrief>(
-    briefPrompt,
-    CompanyBriefOutputSchema,
-    llmContext
+  const companyBrief = await llmLimiter(() =>
+    llm.generateStructured<CompanyBrief>(
+      briefPrompt,
+      CompanyBriefOutputSchema,
+      llmContext
+    )
   );
 
   // Guarantee companyBrief has at least rootUrl in sources if none returned
@@ -360,13 +387,14 @@ export async function runGenerationPipeline(
   // Stage 5: Category-Specific Question Generation (Bounded Concurrency & Deterministic Merge)
   // Phase 3B: Categories executed with bounded parallel limit (MAX_CONCURRENT_LLM_CALLS = 2)
   // --------------------------------------------------------------------------
+  checkAbort();
   await onProgress(
     "generating_questions",
     65,
     "Generating categorized interview questions (bounded parallel)"
   );
   logger.info(
-    { generationId, concurrency: llmConcurrency },
+    { generationId },
     "Pipeline stage 5: Category-Specific Question Generation"
   );
 
@@ -440,13 +468,10 @@ export async function runGenerationPipeline(
     if (!result || result.questions.length === 0) continue;
 
     for (const q of result.questions) {
-      // Enforce valid requirement reference check
+      // Enforce valid requirement reference check without fallback to arbitrary requirements
       const validReqIds = q.requirement_ids.filter((id) =>
         roleOutput.requirements.some((r) => r.id === id)
       );
-      if (validReqIds.length === 0 && roleOutput.requirements.length > 0) {
-        validReqIds.push(roleOutput.requirements[0].id);
-      }
 
       allQuestions.push({
         ...q,
@@ -527,18 +552,24 @@ export async function runGenerationPipeline(
       startQuestionNumber: questionCounter,
     });
 
+    checkAbort();
     try {
-      const targetedResult =
-        await llm.generateStructured<TargetedQuestionsOutput>(
+      const targetedResult = await llmLimiter(() =>
+        llm.generateStructured<TargetedQuestionsOutput>(
           targetedPrompt,
           TargetedQuestionsOutputSchema,
           llmContext
-        );
+        )
+      );
 
       for (const q of targetedResult.questions) {
+        const validReqIds = q.requirement_ids.filter((id) =>
+          roleOutput.requirements.some((r) => r.id === id)
+        );
         allQuestions.push({
           ...q,
           id: `q${questionCounter++}`,
+          requirement_ids: validReqIds,
         });
       }
 
@@ -575,6 +606,7 @@ export async function runGenerationPipeline(
   // --------------------------------------------------------------------------
   // Stage 7: Flashcard Generation (LLM)
   // --------------------------------------------------------------------------
+  checkAbort();
   await onProgress(
     "generating_flashcards",
     88,
@@ -589,12 +621,20 @@ export async function runGenerationPipeline(
       questions: allQuestions,
       companyName,
     });
-    const flashcardResult = await llm.generateStructured<FlashcardsOutput>(
-      flashcardPrompt,
-      FlashcardsOutputSchema,
-      llmContext
+    const flashcardResult = await llmLimiter(() =>
+      llm.generateStructured<FlashcardsOutput>(
+        flashcardPrompt,
+        FlashcardsOutputSchema,
+        llmContext
+      )
     );
-    flashcards = flashcardResult.flashcards;
+    flashcards = flashcardResult.flashcards.map((f, idx) => ({
+      ...f,
+      id: f.id || `f${idx + 1}`,
+      requirement_ids: f.requirement_ids.filter((id) =>
+        roleOutput.requirements.some((r) => r.id === id)
+      ),
+    }));
   } catch (flashErr) {
     logger.warn(
       { generationId, flashErr },
@@ -611,6 +651,7 @@ export async function runGenerationPipeline(
   // --------------------------------------------------------------------------
   // Stage 8: Deterministic Schedule Allocation
   // --------------------------------------------------------------------------
+  checkAbort();
   await onProgress(
     "building_schedule",
     95,

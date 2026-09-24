@@ -29,7 +29,7 @@ import { PracticeModal } from "@/components/kit/PracticeModal";
 
 interface KitResponse {
   id: string;
-  status: "queued" | "running" | "completed" | "failed";
+  status: "queued" | "running" | "completed" | "failed" | "cancelled";
   input: { jd: string; company_url: string; days: number };
   kit: Kit | null;
   generation: {
@@ -327,8 +327,8 @@ export default function KitDetailPage({
     );
   }
 
-  // Generation In-Progress or Failed
-  if (data.status === "running" || data.status === "queued" || data.status === "failed") {
+  // Generation In-Progress, Failed, or Cancelled
+  if (data.status === "running" || data.status === "queued" || data.status === "failed" || data.status === "cancelled") {
     return (
       <div className="min-h-screen bg-slate-50 flex flex-col">
         <Navbar />

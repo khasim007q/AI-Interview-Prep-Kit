@@ -16,6 +16,7 @@ export interface GenerationContext {
   callCount?: number;
   maxCalls?: number;
   incrementCallCount?: () => void;
+  signal?: AbortSignal;
 }
 
 export interface LLMProvider {
@@ -75,6 +76,13 @@ export function cleanJsonOutput(raw: string): string {
  */
 export function isNonRetryableError(err: unknown): boolean {
   if (!err) return false;
+  if (
+    (err as Error)?.name === "AbortError" ||
+    ((err as Error)?.message || "").toLowerCase().includes("abort") ||
+    (err as AppError)?.code === "GENERATION_CANCELLED"
+  ) {
+    return true;
+  }
   const errorObj = err as Record<string, unknown>;
   const msg = ((err as Error)?.message || "").toLowerCase();
   const status = errorObj.status || (errorObj.response as Record<string, unknown>)?.status;
@@ -297,6 +305,11 @@ export class GeminiProvider implements LLMProvider {
     while (attempt < maxAttempts) {
       attempt++;
 
+      // Check cancellation signal
+      if (context?.signal?.aborted) {
+        throw new AppError(499, "GENERATION_CANCELLED", "Generation was cancelled");
+      }
+
       // Check deadline
       if (context?.deadline && Date.now() > context.deadline) {
         throw new AppError(
@@ -333,7 +346,9 @@ export class GeminiProvider implements LLMProvider {
           "Dispatching Gemini generateContent call"
         );
 
-        const result = await model.generateContent(request.prompt);
+        const result = await model.generateContent(request.prompt, {
+          signal: context?.signal,
+        });
         const durationMs = Date.now() - startTime;
         const rawText = result.response.text();
 
@@ -390,6 +405,11 @@ export class GeminiProvider implements LLMProvider {
           "Response failed JSON/schema validation; initiating single repair attempt"
         );
 
+        // Check cancellation before repair call
+        if (context?.signal?.aborted) {
+          throw new AppError(499, "GENERATION_CANCELLED", "Generation was cancelled");
+        }
+
         // Check deadline and budget before repair call
         if (context?.deadline && Date.now() > context.deadline) {
           throw new AppError(504, "GENERATION_TIMEOUT", "Generation deadline exceeded during repair");
@@ -406,7 +426,9 @@ export class GeminiProvider implements LLMProvider {
         const repairStart = Date.now();
         const repairPrompt = `${request.prompt}\n\nCRITICAL FIX REQUIRED: Your previous output was invalid.\nPrevious response:\n${rawText.slice(0, 1500)}\n\nOutput ONLY valid JSON adhering strictly to the schema without markdown commentary.`;
 
-        const repairResult = await model.generateContent(repairPrompt);
+        const repairResult = await model.generateContent(repairPrompt, {
+          signal: context?.signal,
+        });
         const repairRaw = repairResult.response.text();
         const repairCleaned = cleanJsonOutput(repairRaw);
         const repairParsed = JSON.parse(repairCleaned);
@@ -427,6 +449,20 @@ export class GeminiProvider implements LLMProvider {
       } catch (err: unknown) {
         lastError = err;
         const durationMs = Date.now() - startTime;
+
+        const isAborted =
+          context?.signal?.aborted ||
+          (err as Error)?.name === "AbortError" ||
+          ((err as Error)?.message || "").toLowerCase().includes("abort") ||
+          (err as AppError)?.code === "GENERATION_CANCELLED";
+
+        if (isAborted) {
+          logger.info(
+            { generationId: context?.generationId, model: modelName },
+            "Gemini generation call aborted due to cancellation"
+          );
+          throw new AppError(499, "GENERATION_CANCELLED", "Generation was cancelled");
+        }
 
         // If non-retryable error, immediately abort
         if (isNonRetryableError(err)) {
@@ -497,6 +533,10 @@ export class MockLLMProvider implements LLMProvider {
     schema: ZodType<T, any, any>,
     context?: GenerationContext
   ): Promise<T> {
+    if (context?.signal?.aborted) {
+      throw new AppError(499, "GENERATION_CANCELLED", "Generation was cancelled");
+    }
+
     this.callCount++;
     context?.incrementCallCount?.();
 

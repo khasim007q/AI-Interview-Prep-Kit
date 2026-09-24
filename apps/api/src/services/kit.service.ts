@@ -1,6 +1,6 @@
 import { ObjectId } from "mongodb";
 import { kitRepository, type KitDoc, type GenerationStatus } from "../repositories/kit.repository.js";
-import { runGenerationPipeline, type GenerationInput } from "../pipeline/orchestrator.js";
+import { runGenerationPipeline, globalPipelineLlmLimiter, type GenerationInput } from "../pipeline/orchestrator.js";
 import { sha256 } from "../utils/hash.js";
 import { normalizeJobDescription } from "../deterministic/jd-normalizer.js";
 import { checkRequirementCoverage } from "../deterministic/coverage-checker.js";
@@ -26,6 +26,9 @@ import type {
   QuestionCategory,
   CompanyBrief,
 } from "@ai-interview-prep/shared";
+
+// In-process active generation AbortControllers by kitId
+const activeGenerations = new Map<string, AbortController>();
 
 export class KitService {
   /**
@@ -84,6 +87,9 @@ export class KitService {
       throw err;
     }
 
+    const abortController = new AbortController();
+    activeGenerations.set(kitDoc._id.toString(), abortController);
+
     const runner = async () => {
       try {
         await kitRepository.updateGenerationProgress(kitDoc._id, {
@@ -102,7 +108,9 @@ export class KitService {
           },
           {
             llmProvider: options.llmProvider || defaultLLMProvider,
+            signal: abortController.signal,
             onProgress: async (stage, progress, message) => {
+              if (abortController.signal.aborted) return;
               await kitRepository.updateGenerationProgress(kitDoc._id, {
                 status: "running",
                 stage,
@@ -116,20 +124,38 @@ export class KitService {
         await kitRepository.saveCompletedKit(kitDoc._id, generatedKit);
         logger.info({ kitId: kitDoc._id }, "Background kit generation finished successfully");
       } catch (err: unknown) {
-        logger.error({ kitId: kitDoc._id, err }, "Kit generation job failed");
         const appErr = err as AppError;
-        await kitRepository.updateGenerationProgress(kitDoc._id, {
-          status: "failed",
-          stage: "failed",
-          progress: 0,
-          message: appErr.message || "Kit generation failed",
-          error: {
-            code: appErr.code || "GENERATION_FAILED",
-            message: appErr.message || "An error occurred during generation",
-            details: appErr.details,
-          },
-          completedAt: new Date(),
-        });
+        const isCancelled =
+          abortController.signal.aborted ||
+          appErr?.code === "GENERATION_CANCELLED" ||
+          (err as Error)?.name === "AbortError";
+
+        if (isCancelled) {
+          logger.info({ kitId: kitDoc._id }, "Kit generation job was cancelled");
+          await kitRepository.updateGenerationProgress(kitDoc._id, {
+            status: "cancelled",
+            stage: "failed",
+            progress: 0,
+            message: "Kit generation was cancelled",
+            completedAt: new Date(),
+          });
+        } else {
+          logger.error({ kitId: kitDoc._id, err }, "Kit generation job failed");
+          await kitRepository.updateGenerationProgress(kitDoc._id, {
+            status: "failed",
+            stage: "failed",
+            progress: 0,
+            message: appErr.message || "Kit generation failed",
+            error: {
+              code: appErr.code || "GENERATION_FAILED",
+              message: appErr.message || "An error occurred during generation",
+              details: appErr.details,
+            },
+            completedAt: new Date(),
+          });
+        }
+      } finally {
+        activeGenerations.delete(kitDoc._id.toString());
       }
     };
 
@@ -156,7 +182,36 @@ export class KitService {
     return kitRepository.findByUserId(userId);
   }
 
+  async cancelKitGeneration(kitId: string, userId: string): Promise<KitDoc> {
+    const kitDoc = await this.getKit(kitId, userId);
+    if (kitDoc.status !== "running" && kitDoc.status !== "queued") {
+      throw new AppError(400, "INVALID_STATE", `Cannot cancel kit with status: ${kitDoc.status}`);
+    }
+
+    const controller = activeGenerations.get(kitId);
+    if (controller) {
+      controller.abort();
+      activeGenerations.delete(kitId);
+    }
+
+    await kitRepository.updateGenerationProgress(kitDoc._id, {
+      status: "cancelled",
+      stage: "failed",
+      progress: 0,
+      message: "Generation cancelled by user",
+      completedAt: new Date(),
+    });
+
+    const updated = await kitRepository.findById(kitId);
+    return updated || kitDoc;
+  }
+
   async deleteKit(kitId: string, userId: string): Promise<boolean> {
+    const controller = activeGenerations.get(kitId);
+    if (controller) {
+      controller.abort();
+      activeGenerations.delete(kitId);
+    }
     const deleted = await kitRepository.delete(kitId, userId);
     if (!deleted) {
       throw new AppError(404, "KIT_NOT_FOUND", "Kit not found or access unauthorized");
@@ -452,9 +507,11 @@ export class KitService {
       discussionFindings
     );
 
-    const newBrief = await llm.generateStructured<CompanyBrief>(
-      briefPrompt,
-      CompanyBriefOutputSchema
+    const newBrief = await globalPipelineLlmLimiter(() =>
+      llm.generateStructured<CompanyBrief>(
+        briefPrompt,
+        CompanyBriefOutputSchema
+      )
     );
 
     kit.company_brief = {
@@ -517,15 +574,20 @@ export class KitService {
       startQuestionNumber: Date.now() % 1000,
     });
 
-    const qResult = await llm.generateStructured<CategoryQuestionsOutput>(
-      qPrompt,
-      CategoryQuestionsOutputSchema
+    const qResult = await globalPipelineLlmLimiter(() =>
+      llm.generateStructured<CategoryQuestionsOutput>(
+        qPrompt,
+        CategoryQuestionsOutputSchema
+      )
     );
 
     const newQuestions = qResult.questions.map((q, idx) => ({
       ...q,
       id: `q_reg_${category}_${idx + 1}`,
       category,
+      requirement_ids: q.requirement_ids.filter((id) =>
+        kit.role.requirements.some((r) => r.id === id)
+      ),
       metadata: {
         origin: "generated" as const,
         edited: false,

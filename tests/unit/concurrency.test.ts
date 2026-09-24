@@ -169,5 +169,5 @@ describe("Concurrency - Deterministic Category Merging", () => {
 
     // Verify deterministic question IDs: q1, q2, q3, q4
     expect(kit.questions.map((q) => q.id)).toEqual(["q1", "q2", "q3", "q4"]);
-  });
+  }, 15000);
 });

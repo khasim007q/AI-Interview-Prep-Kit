@@ -4,7 +4,7 @@ import Link from "next/link";
 import { Sparkles, AlertCircle, RefreshCw } from "lucide-react";
 
 interface GenerationProgressViewProps {
-  status: "queued" | "running" | "completed" | "failed";
+  status: "queued" | "running" | "completed" | "failed" | "cancelled";
   generation: {
     stage: string;
     progress: number;
@@ -19,16 +19,19 @@ export function GenerationProgressView({
   generation,
   onRetry,
 }: GenerationProgressViewProps) {
-  if (status === "failed") {
+  if (status === "failed" || status === "cancelled") {
+    const isCancelled = status === "cancelled";
     return (
       <div className="flex-1 flex items-center justify-center p-6">
-        <div className="mx-auto max-w-lg w-full bg-white rounded-2xl border border-red-200 p-8 shadow-sm text-center">
-          <AlertCircle className="h-12 w-12 text-red-500 mx-auto mb-4" />
-          <h2 className="text-xl font-bold text-slate-900">Kit Generation Failed</h2>
+        <div className={`mx-auto max-w-lg w-full bg-white rounded-2xl border ${isCancelled ? "border-amber-200" : "border-red-200"} p-8 shadow-sm text-center`}>
+          <AlertCircle className={`h-12 w-12 ${isCancelled ? "text-amber-500" : "text-red-500"} mx-auto mb-4`} />
+          <h2 className="text-xl font-bold text-slate-900">
+            {isCancelled ? "Kit Generation Cancelled" : "Kit Generation Failed"}
+          </h2>
           <p className="mt-2 text-sm text-slate-600">
             {generation.error?.message ||
               generation.message ||
-              "The research or generation pipeline encountered an error."}
+              (isCancelled ? "The generation job was cancelled." : "The research or generation pipeline encountered an error.")}
           </p>
           <div className="mt-6 flex items-center justify-center gap-3">
             {onRetry && (

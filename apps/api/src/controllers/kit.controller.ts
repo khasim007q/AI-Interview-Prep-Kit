@@ -103,6 +103,23 @@ export class KitController {
     }
   }
 
+  async cancelKit(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const userId = req.user!.id;
+      const kitId = getParam(req.params.kitId);
+      const updated = await kitService.cancelKitGeneration(kitId, userId);
+
+      res.status(200).json({
+        id: updated._id.toString(),
+        status: updated.status,
+        generation: updated.generation,
+        message: "Kit generation cancelled successfully",
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
   async updateKit(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const userId = req.user!.id;

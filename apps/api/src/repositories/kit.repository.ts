@@ -2,7 +2,12 @@ import { ObjectId } from "mongodb";
 import { getDatabase } from "./db.js";
 import type { Kit } from "@ai-interview-prep/shared";
 
-export type GenerationStatus = "queued" | "running" | "completed" | "failed";
+export type GenerationStatus =
+  | "queued"
+  | "running"
+  | "completed"
+  | "failed"
+  | "cancelled";
 
 export interface GenerationMetadata {
   status: GenerationStatus;

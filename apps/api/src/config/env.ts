@@ -27,6 +27,7 @@ const EnvSchema = z.object({
   GEMINI_FALLBACK_MODEL: z.string().default("gemini-3.5-flash"),
   MAX_ATTEMPTS_PER_MODEL: z.coerce.number().default(2),
   MAX_RETRY_DELAY_MS: z.coerce.number().default(10000),
+  LLM_CONCURRENCY: z.coerce.number().default(2),
   MAX_CONCURRENT_LLM_CALLS: z.coerce.number().default(2),
   MAX_GENERATION_TIME_MS: z.coerce.number().default(120000),
   MAX_LLM_CALLS_PER_GENERATION: z.coerce.number().default(12),

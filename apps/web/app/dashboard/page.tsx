@@ -20,7 +20,7 @@ import {
 
 interface KitListItem {
   id: string;
-  status: "queued" | "running" | "completed" | "failed";
+  status: "queued" | "running" | "completed" | "failed" | "cancelled";
   company: string;
   role: string;
   days_available: number;
