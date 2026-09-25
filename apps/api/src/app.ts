@@ -4,6 +4,7 @@ import cookieParser from "cookie-parser";
 import { env } from "./config/env.js";
 import { logger } from "./utils/logger.js";
 import { errorMiddleware } from "./middleware/error.middleware.js";
+import { compressionMiddleware } from "./middleware/compression.middleware.js";
 import { authRouter } from "./routes/auth.routes.js";
 import { kitsRouter } from "./routes/kits.routes.js";
 
@@ -50,6 +51,7 @@ app.use(
       return callback(null, false);
     },
     credentials: true,
+    maxAge: 86400, // Cache preflight OPTIONS responses for 24h across browsers
   })
 );
 
@@ -84,6 +86,7 @@ app.use((req, res, next) => {
 // Body and Cookie Parsers
 app.use(express.json({ limit: "5mb" }));
 app.use(cookieParser());
+app.use(compressionMiddleware);
 
 // Collapse consecutive slashes in request paths (e.g. //auth/login -> /auth/login)
 app.use((req, _res, next) => {

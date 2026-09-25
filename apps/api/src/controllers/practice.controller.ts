@@ -1,5 +1,6 @@
 import type { Request, Response, NextFunction } from "express";
 import { kitService } from "../services/kit.service.js";
+import { kitRepository } from "../repositories/kit.repository.js";
 import { practiceRepository } from "../repositories/practice.repository.js";
 import { PracticeConfidenceSchema } from "@ai-interview-prep/shared";
 import { z } from "zod";
@@ -41,8 +42,9 @@ export class PracticeController {
     try {
       const userId = req.user!.id;
       const kitId = getParam(req.params.kitId);
-      const kitDoc = await kitService.getKit(kitId, userId);
-      const totalCards = kitDoc.kit?.flashcards.length || 0;
+      const doc = await kitRepository.findFlashcards(kitId, userId);
+      const flashcards = doc?.kit?.flashcards || [];
+      const totalCards = flashcards.length;
 
       const summary = await practiceRepository.getSummary(
         kitId,
@@ -51,11 +53,11 @@ export class PracticeController {
       );
 
       // Map weak flashcards back to requirement texts
-      if (kitDoc.kit) {
+      if (flashcards.length > 0) {
         const weakCardIdSet = new Set(summary.weakFlashcardIds);
         const weakReqIdSet = new Set<string>();
 
-        for (const card of kitDoc.kit.flashcards) {
+        for (const card of flashcards) {
           if (weakCardIdSet.has(card.id)) {
             for (const rId of card.requirement_ids) {
               weakReqIdSet.add(rId);

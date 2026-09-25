@@ -7,8 +7,7 @@ import {
   Edit3,
   ChevronDown,
   ChevronUp,
-  ArrowUp,
-  ArrowDown,
+  GripVertical,
   Tag,
   Save,
   X,
@@ -26,8 +25,12 @@ interface QuestionCardProps {
   totalCount: number;
   onUpdate: (questionId: string, patch: Partial<Question>) => void;
   onDelete: (questionId: string) => void;
-  onMoveUp: (index: number) => void;
-  onMoveDown: (index: number) => void;
+  isDragging?: boolean;
+  isDragOver?: boolean;
+  onDragStart?: (e: React.DragEvent, id: string) => void;
+  onDragOver?: (e: React.DragEvent, id: string) => void;
+  onDrop?: (e: React.DragEvent, id: string) => void;
+  onDragEnd?: () => void;
 }
 
 const CATEGORIES: { value: QuestionCategory; label: string }[] = [
@@ -49,8 +52,12 @@ export function QuestionCard({
   totalCount,
   onUpdate,
   onDelete,
-  onMoveUp,
-  onMoveDown,
+  isDragging,
+  isDragOver,
+  onDragStart,
+  onDragOver,
+  onDrop,
+  onDragEnd,
 }: QuestionCardProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
@@ -104,8 +111,17 @@ export function QuestionCard({
 
   return (
     <div
-      className={`rounded-2xl border transition-all ${
-        isPinned
+      draggable={!isEditing}
+      onDragStart={(e) => onDragStart?.(e, question.id)}
+      onDragOver={(e) => onDragOver?.(e, question.id)}
+      onDrop={(e) => onDrop?.(e, question.id)}
+      onDragEnd={onDragEnd}
+      className={`rounded-2xl border transition-all duration-150 ${
+        isDragging
+          ? "opacity-40 scale-[0.99] border-dashed border-indigo-400 bg-indigo-50/20"
+          : isDragOver
+          ? "border-t-4 border-t-indigo-600 border-indigo-300 shadow-md ring-2 ring-indigo-100"
+          : isPinned
           ? "border-amber-300 bg-amber-50/20 shadow-sm"
           : "border-slate-200 bg-white hover:border-slate-300 shadow-sm"
       }`}
@@ -114,6 +130,14 @@ export function QuestionCard({
         {/* Card Header & Controls */}
         <div className="flex items-start justify-between gap-3 mb-3 flex-wrap">
           <div className="flex items-center gap-2 flex-wrap">
+            {/* Drag Handle */}
+            <div
+              title="Drag and drop anywhere to reorder"
+              className="cursor-grab active:cursor-grabbing p-1 -ml-1 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded transition"
+            >
+              <GripVertical className="h-4 w-4" />
+            </div>
+
             <span className="font-mono text-xs font-bold text-slate-500 bg-slate-100 px-2 py-0.5 rounded">
               #{index + 1}
             </span>
@@ -182,26 +206,6 @@ export function QuestionCard({
 
           {/* Action Toolbar */}
           <div className="flex items-center gap-1">
-            {/* Up / Down Reorder */}
-            <button
-              onClick={() => onMoveUp(index)}
-              disabled={index === 0}
-              title="Move Up"
-              className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700 disabled:opacity-30 transition"
-              aria-label="Move question up"
-            >
-              <ArrowUp className="h-4 w-4" />
-            </button>
-            <button
-              onClick={() => onMoveDown(index)}
-              disabled={index === totalCount - 1}
-              title="Move Down"
-              className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700 disabled:opacity-30 transition"
-              aria-label="Move question down"
-            >
-              <ArrowDown className="h-4 w-4" />
-            </button>
-
             {/* Pin Toggle */}
             <button
               onClick={handleTogglePin}

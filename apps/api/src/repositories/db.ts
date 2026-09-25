@@ -87,6 +87,7 @@ async function ensureIndexes(database: Db): Promise<void> {
     const attempts = database.collection("practice_attempts");
     await attempts.createIndex({ kitId: 1, flashcardId: 1 });
     await attempts.createIndex({ userId: 1, kitId: 1 });
+    await attempts.createIndex({ userId: 1, kitId: 1, createdAt: -1 });
 
     // Research cache collection
     const researchCache = database.collection("research_cache");

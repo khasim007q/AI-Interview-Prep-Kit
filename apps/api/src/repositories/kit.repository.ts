@@ -130,9 +130,46 @@ export class KitRepository {
     }
     const userObjId = typeof userId === "string" ? new ObjectId(userId) : userId;
     return this.collection
-      .find({ userId: userObjId })
+      .find(
+        { userId: userObjId },
+        {
+          projection: {
+            status: 1,
+            "input.days": 1,
+            "kit.source.company": 1,
+            "kit.role.title": 1,
+            "kit.schedule.days_available": 1,
+            createdAt: 1,
+            updatedAt: 1,
+            generation: 1,
+          },
+        }
+      )
       .sort({ updatedAt: -1 })
-      .toArray();
+      .toArray() as Promise<KitDoc[]>;
+  }
+
+  /**
+   * Lightweight projection for practice summary.
+   * Avoids pulling full question banks, schedule, and company research bodies.
+   */
+  async findFlashcards(
+    kitId: string | ObjectId,
+    userId: string | ObjectId
+  ): Promise<{ kit: { flashcards: Kit["flashcards"] } | null } | null> {
+    if (!ObjectId.isValid(kitId) || !ObjectId.isValid(userId)) {
+      return null;
+    }
+    const kitObjId = typeof kitId === "string" ? new ObjectId(kitId) : kitId;
+    const userObjId = typeof userId === "string" ? new ObjectId(userId) : userId;
+    return this.collection.findOne(
+      { _id: kitObjId, userId: userObjId },
+      {
+        projection: {
+          "kit.flashcards": 1,
+        },
+      }
+    ) as Promise<{ kit: { flashcards: Kit["flashcards"] } | null } | null>;
   }
 
   async findExistingCompleted(

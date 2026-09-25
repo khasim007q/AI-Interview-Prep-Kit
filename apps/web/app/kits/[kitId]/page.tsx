@@ -166,6 +166,20 @@ export default function KitDetailPage({
     }
   };
 
+  const reconcileServerMutation = (data: any) => {
+    setMutationError(null);
+    if (data?.version) {
+      queryClient.setQueryData<KitResponse>(["kit", kitId], (old) => {
+        if (!old) return old;
+        return {
+          ...old,
+          version: data.version,
+          kit: data.kit || old.kit,
+        };
+      });
+    }
+  };
+
   // --- Optimistic Mutations ---
 
   const addQuestionMutation = useMutation({
@@ -196,9 +210,7 @@ export default function KitDetailPage({
       }
       handleMutationError(err);
     },
-    onSuccess: () => {
-      setMutationError(null);
-    },
+    onSuccess: reconcileServerMutation,
   });
 
   const updateQuestionMutation = useMutation({
@@ -237,9 +249,7 @@ export default function KitDetailPage({
       }
       handleMutationError(err);
     },
-    onSuccess: () => {
-      setMutationError(null);
-    },
+    onSuccess: reconcileServerMutation,
   });
 
   const deleteQuestionMutation = useMutation({
@@ -269,9 +279,7 @@ export default function KitDetailPage({
       }
       handleMutationError(err);
     },
-    onSuccess: () => {
-      setMutationError(null);
-    },
+    onSuccess: reconcileServerMutation,
   });
 
   const reorderQuestionsMutation = useMutation({
@@ -309,9 +317,7 @@ export default function KitDetailPage({
       }
       handleMutationError(err);
     },
-    onSuccess: () => {
-      setMutationError(null);
-    },
+    onSuccess: reconcileServerMutation,
   });
 
   const addFlashcardMutation = useMutation({
@@ -342,9 +348,7 @@ export default function KitDetailPage({
       }
       handleMutationError(err);
     },
-    onSuccess: () => {
-      setMutationError(null);
-    },
+    onSuccess: reconcileServerMutation,
   });
 
   const updateFlashcardMutation = useMutation({
@@ -383,9 +387,7 @@ export default function KitDetailPage({
       }
       handleMutationError(err);
     },
-    onSuccess: () => {
-      setMutationError(null);
-    },
+    onSuccess: reconcileServerMutation,
   });
 
   const deleteFlashcardMutation = useMutation({
@@ -415,9 +417,7 @@ export default function KitDetailPage({
       }
       handleMutationError(err);
     },
-    onSuccess: () => {
-      setMutationError(null);
-    },
+    onSuccess: reconcileServerMutation,
   });
 
   const regenerateCategoryMutation = useMutation({

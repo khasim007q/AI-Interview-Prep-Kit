@@ -170,8 +170,8 @@ describe("Production Hardening Pass 2 - Targeted Verifications", () => {
         requirements: [{ id: "r1", text: "Coding", kind: "technical", priority: "must" }],
       });
 
-      // Abort after 10ms
-      setTimeout(() => controller.abort(), 10);
+      // Abort signal
+      controller.abort();
 
       await expect(
         runGenerationPipeline(

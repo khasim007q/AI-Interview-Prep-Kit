@@ -55,35 +55,52 @@ export function QuestionBank({
     "company-fit": questions.filter((q) => q.category === "company-fit").length,
   };
 
-  const handleMoveUp = (index: number) => {
-    if (index === 0) return;
-    const currentQ = filteredQuestions[index];
-    const prevQ = filteredQuestions[index - 1];
+  const [draggedId, setDraggedId] = useState<string | null>(null);
+  const [dragOverId, setDragOverId] = useState<string | null>(null);
 
-    // Find indices in global questions array
-    const globalCurrentIdx = questions.findIndex((q) => q.id === currentQ.id);
-    const globalPrevIdx = questions.findIndex((q) => q.id === prevQ.id);
+  const handleDragStart = (e: React.DragEvent, id: string) => {
+    setDraggedId(id);
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", id);
+  };
+
+  const handleDragOver = (e: React.DragEvent, id: string) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    if (dragOverId !== id) {
+      setDragOverId(id);
+    }
+  };
+
+  const handleDrop = (e: React.DragEvent, targetId: string) => {
+    e.preventDefault();
+    if (!draggedId || draggedId === targetId) {
+      setDraggedId(null);
+      setDragOverId(null);
+      return;
+    }
+
+    const currentIdx = questions.findIndex((q) => q.id === draggedId);
+    const targetIdx = questions.findIndex((q) => q.id === targetId);
+
+    if (currentIdx === -1 || targetIdx === -1) {
+      setDraggedId(null);
+      setDragOverId(null);
+      return;
+    }
 
     const reordered = [...questions];
-    reordered[globalCurrentIdx] = prevQ;
-    reordered[globalPrevIdx] = currentQ;
+    const [moved] = reordered.splice(currentIdx, 1);
+    reordered.splice(targetIdx, 0, moved);
 
+    setDraggedId(null);
+    setDragOverId(null);
     onReorderQuestions(reordered.map((q) => q.id));
   };
 
-  const handleMoveDown = (index: number) => {
-    if (index >= filteredQuestions.length - 1) return;
-    const currentQ = filteredQuestions[index];
-    const nextQ = filteredQuestions[index + 1];
-
-    const globalCurrentIdx = questions.findIndex((q) => q.id === currentQ.id);
-    const globalNextIdx = questions.findIndex((q) => q.id === nextQ.id);
-
-    const reordered = [...questions];
-    reordered[globalCurrentIdx] = nextQ;
-    reordered[globalNextIdx] = currentQ;
-
-    onReorderQuestions(reordered.map((q) => q.id));
+  const handleDragEnd = () => {
+    setDraggedId(null);
+    setDragOverId(null);
   };
 
   return (
@@ -146,10 +163,10 @@ export function QuestionBank({
         </div>
       </div>
 
-      {/* Helpful Hint on Preservation */}
+      {/* Helpful Hint on Drag and Drop */}
       <div className="flex items-center justify-between text-xs text-slate-500 px-1">
         <span>
-          Showing {filteredQuestions.length} of {questions.length} questions. Use Up/Down controls to adjust order.
+          Showing {filteredQuestions.length} of {questions.length} questions. Drag and drop any card to reorder.
         </span>
         <span className="hidden sm:inline-flex items-center gap-1 text-slate-400">
           <Sparkles className="h-3 w-3 text-amber-500" />
@@ -185,8 +202,12 @@ export function QuestionBank({
               totalCount={filteredQuestions.length}
               onUpdate={onUpdateQuestion}
               onDelete={onDeleteQuestion}
-              onMoveUp={handleMoveUp}
-              onMoveDown={handleMoveDown}
+              isDragging={draggedId === q.id}
+              isDragOver={dragOverId === q.id && draggedId !== q.id}
+              onDragStart={handleDragStart}
+              onDragOver={handleDragOver}
+              onDrop={handleDrop}
+              onDragEnd={handleDragEnd}
             />
           ))}
         </div>

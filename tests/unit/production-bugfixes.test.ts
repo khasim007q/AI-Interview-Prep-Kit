@@ -305,4 +305,157 @@ describe("Production Bugfixes & Hardening Verifications", () => {
       expect(state).toBe("temporarily_unavailable");
     });
   });
+
+  describe("5. Latency Optimizations & 409 Conflict Auto-Retry", () => {
+    it("should recover from KIT_VERSION_CONFLICT automatically without failing with 409", async () => {
+      const { kitService } = await import("../../apps/api/src/services/kit.service.js");
+      const { AppError } = await import("../../apps/api/src/middleware/error.middleware.js");
+
+      const mockKitDoc = {
+        _id: new ObjectId(mockKitId),
+        userId: new ObjectId(mockUserId),
+        version: 1,
+        status: "completed" as const,
+        kit: {
+          role: { title: "Engineer", requirements: [] },
+          schedule: { days_available: 3 },
+          questions: [
+            { id: "q1", prompt: "Q1", category: "technical" as const, difficulty: 1 as const },
+            { id: "q2", prompt: "Q2", category: "technical" as const, difficulty: 1 as const },
+          ],
+          flashcards: [],
+          coverage: { uncovered_requirement_ids: [] },
+        },
+      };
+
+      // Spy on getKit
+      let getKitCalls = 0;
+      vi.spyOn(kitService, "getKit").mockImplementation(async () => {
+        getKitCalls++;
+        return {
+          ...mockKitDoc,
+          version: getKitCalls, // version updates on each reload
+        } as any;
+      });
+
+      // Spy on updateKit: fail on attempt 1 with 409, succeed on attempt 2
+      let updateCalls = 0;
+      vi.spyOn(kitService, "updateKit").mockImplementation(async (_kitId, _userId, version) => {
+        updateCalls++;
+        if (updateCalls === 1) {
+          throw new AppError(409, "KIT_VERSION_CONFLICT", "Version conflict simulated");
+        }
+        return {
+          ...mockKitDoc,
+          version: version + 1,
+        } as any;
+      });
+
+      const result = await kitService.reorderQuestions(mockKitId, mockUserId, ["q2", "q1"]);
+      expect(result).toBeDefined();
+      expect(updateCalls).toBe(2);
+      expect(getKitCalls).toBe(2);
+    });
+
+    it("should cache validated sessions in-memory to eliminate repeated MongoDB queries", async () => {
+      const { authService, clearSessionCache } = await import("../../apps/api/src/services/auth.service.js");
+      const { sessionRepository } = await import("../../apps/api/src/repositories/session.repository.js");
+      const { userRepository } = await import("../../apps/api/src/repositories/user.repository.js");
+
+      // Restore validateSession from beforeEach mock so we test the real implementation
+      vi.spyOn(authService, "validateSession").mockRestore();
+
+      clearSessionCache();
+      const testToken = "test_cache_token_xyz_987";
+      const testUserId = new ObjectId();
+
+      const sessionSpy = vi.spyOn(sessionRepository, "findByTokenHash").mockResolvedValue({
+        _id: new ObjectId(),
+        userId: testUserId,
+        tokenHash: "hashed",
+        createdAt: new Date(),
+        expiresAt: new Date(Date.now() + 60000),
+      } as any);
+
+      vi.spyOn(sessionRepository, "deleteByTokenHash").mockResolvedValue(true);
+
+      const userSpy = vi.spyOn(userRepository, "findById").mockResolvedValue({
+        _id: testUserId,
+        email: "cachetest@example.com",
+        createdAt: new Date(),
+      } as any);
+
+      // First call -> hits database
+      const u1 = await authService.validateSession(testToken);
+      expect(u1?.email).toBe("cachetest@example.com");
+      expect(sessionSpy).toHaveBeenCalledTimes(1);
+      expect(userSpy).toHaveBeenCalledTimes(1);
+
+      // Second call -> served from in-memory cache
+      const u2 = await authService.validateSession(testToken);
+      expect(u2?.email).toBe("cachetest@example.com");
+      expect(sessionSpy).toHaveBeenCalledTimes(1); // not called again
+      expect(userSpy).toHaveBeenCalledTimes(1); // not called again
+
+      // Logout clears cache
+      await authService.logout(testToken);
+      clearSessionCache();
+    });
+
+    it("should compress responses > 1KB with gzip when client sends Accept-Encoding: gzip", async () => {
+      const { compressionMiddleware } = await import("../../apps/api/src/middleware/compression.middleware.js");
+      const express = (await import("express")).default;
+      const zlib = await import("node:zlib");
+
+      const compApp = express();
+      compApp.use(compressionMiddleware);
+      compApp.get("/large", (_req, res) => {
+        // Return 5KB of json data
+        res.json({ payload: "a".repeat(5000) });
+      });
+
+      const res = await fetch(`${serverUrl}/api/health`, {
+        headers: { "Accept-Encoding": "gzip" },
+      });
+      // Health is small (<1KB), so it stays uncompressed (db may be disconnected in unit test -> 503)
+      expect([200, 503]).toContain(res.status);
+
+      // Test large payload compression with compressionMiddleware directly
+      const req: any = { headers: { "accept-encoding": "gzip, deflate" } };
+      let headers: Record<string, string> = {};
+      let sentBody: any = null;
+      const mockRes: any = {
+        headersSent: false,
+        getHeader: (k: string) => headers[k],
+        setHeader: (k: string, v: string) => { headers[k] = v; },
+        removeHeader: (k: string) => { delete headers[k]; },
+        send: (b: any) => { sentBody = b; return mockRes; },
+      };
+
+      compressionMiddleware(req, mockRes, () => {
+        mockRes.send(JSON.stringify({ data: "x".repeat(3000) }));
+      });
+
+      expect(headers["Content-Encoding"]).toBe("gzip");
+      expect(headers["Vary"]).toBe("Accept-Encoding");
+      expect(Buffer.isBuffer(sentBody)).toBe(true);
+
+      const decompressed = zlib.gunzipSync(sentBody).toString();
+      expect(JSON.parse(decompressed)).toEqual({ data: "x".repeat(3000) });
+    });
+
+    it("should return Access-Control-Max-Age: 86400 on CORS preflight requests", async () => {
+      const res = await fetch(`${serverUrl}/api/kits/${mockKitId}/questions/order`, {
+        method: "OPTIONS",
+        headers: {
+          Origin: "http://localhost:3000",
+          "Access-Control-Request-Method": "PATCH",
+        },
+      });
+
+      expect(res.status).toBe(204);
+      expect(res.headers.get("access-control-max-age")).toBe("86400");
+    });
+  });
 });
+

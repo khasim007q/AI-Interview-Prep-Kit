@@ -279,36 +279,70 @@ export class KitService {
   }
 
   // --------------------------------------------------------------------------
-  // Granular Question Operations
+  // Granular Question Operations with Conflict Retry
   // --------------------------------------------------------------------------
 
-  async addQuestion(kitId: string, userId: string, question: Question): Promise<KitDoc> {
-    const doc = await this.getKit(kitId, userId);
-    if (!doc.kit) throw new AppError(400, "KIT_NOT_READY", "Kit has not finished generating");
-
-    const kit = doc.kit;
-    // Ensure unique ID
-    if (kit.questions.some((q) => q.id === question.id)) {
-      question.id = `q_${Date.now()}`;
+  private async executeWithConflictRetry<T>(
+    operation: () => Promise<T>,
+    maxRetries = 3
+  ): Promise<T> {
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        return await operation();
+      } catch (err) {
+        if (
+          err instanceof AppError &&
+          err.code === "KIT_VERSION_CONFLICT" &&
+          attempt < maxRetries
+        ) {
+          logger.warn(
+            { attempt, maxRetries },
+            "Kit version conflict detected; retrying with refreshed state"
+          );
+          await new Promise((resolve) =>
+            setTimeout(resolve, 50 * Math.pow(2, attempt) + Math.random() * 25)
+          );
+          continue;
+        }
+        throw err;
+      }
     }
+    throw new AppError(
+      409,
+      "KIT_VERSION_CONFLICT",
+      "The kit was modified by another session. Please reload the latest changes."
+    );
+  }
 
-    question.metadata = {
-      origin: "user",
-      edited: false,
-      pinned: false,
-      state: "active",
-      revision: 1,
-      ...question.metadata,
-    };
+  async addQuestion(kitId: string, userId: string, question: Question): Promise<KitDoc> {
+    return this.executeWithConflictRetry(async () => {
+      const doc = await this.getKit(kitId, userId);
+      if (!doc.kit) throw new AppError(400, "KIT_NOT_READY", "Kit has not finished generating");
 
-    kit.questions.push(question);
+      const kit = doc.kit;
+      // Ensure unique ID
+      if (kit.questions.some((q) => q.id === question.id)) {
+        question.id = `q_${Date.now()}`;
+      }
 
-    // Re-evaluate coverage and schedule
-    const coverage = checkRequirementCoverage(kit.role.requirements, kit.questions);
-    kit.coverage.uncovered_requirement_ids = coverage.uncoveredRequirementIds;
-    kit.schedule = allocateSchedule(kit.schedule.days_available, kit.questions, kit.role.requirements);
+      question.metadata = {
+        origin: "user",
+        edited: false,
+        pinned: false,
+        state: "active",
+        revision: 1,
+        ...question.metadata,
+      };
 
-    return this.updateKit(kitId, userId, doc.version, kit);
+      kit.questions.push(question);
+
+      // Re-evaluate coverage and schedule
+      const coverage = checkRequirementCoverage(kit.role.requirements, kit.questions);
+      kit.coverage.uncovered_requirement_ids = coverage.uncoveredRequirementIds;
+      kit.schedule = allocateSchedule(kit.schedule.days_available, kit.questions, kit.role.requirements);
+
+      return this.updateKit(kitId, userId, doc.version, kit);
+    });
   }
 
   async updateQuestion(
@@ -317,67 +351,71 @@ export class KitService {
     questionId: string,
     patch: Partial<Question>
   ): Promise<KitDoc> {
-    const doc = await this.getKit(kitId, userId);
-    if (!doc.kit) throw new AppError(400, "KIT_NOT_READY", "Kit has not finished generating");
+    return this.executeWithConflictRetry(async () => {
+      const doc = await this.getKit(kitId, userId);
+      if (!doc.kit) throw new AppError(400, "KIT_NOT_READY", "Kit has not finished generating");
 
-    const kit = doc.kit;
-    const qIndex = kit.questions.findIndex((q) => q.id === questionId);
-    if (qIndex === -1) {
-      throw new AppError(404, "QUESTION_NOT_FOUND", `Question '${questionId}' not found`);
-    }
+      const kit = doc.kit;
+      const qIndex = kit.questions.findIndex((q) => q.id === questionId);
+      if (qIndex === -1) {
+        throw new AppError(404, "QUESTION_NOT_FOUND", `Question '${questionId}' not found`);
+      }
 
-    const currentMeta = kit.questions[qIndex].metadata || {
-      origin: "generated",
-      edited: false,
-      pinned: false,
-      state: "active",
-      revision: 0,
-    };
+      const currentMeta = kit.questions[qIndex].metadata || {
+        origin: "generated",
+        edited: false,
+        pinned: false,
+        state: "active",
+        revision: 0,
+      };
 
-    const newMeta = {
-      ...currentMeta,
-      origin: "user" as const,
-      edited: true,
-      editedAt: new Date().toISOString(),
-      pinned:
-        patch.metadata?.pinned !== undefined ? patch.metadata.pinned : currentMeta.pinned ?? false,
-      state: currentMeta.state || "active",
-      revision: (currentMeta.revision || 0) + 1,
-    };
+      const newMeta = {
+        ...currentMeta,
+        origin: "user" as const,
+        edited: true,
+        editedAt: new Date().toISOString(),
+        pinned:
+          patch.metadata?.pinned !== undefined ? patch.metadata.pinned : currentMeta.pinned ?? false,
+        state: currentMeta.state || "active",
+        revision: (currentMeta.revision || 0) + 1,
+      };
 
-    kit.questions[qIndex] = {
-      ...kit.questions[qIndex],
-      ...patch,
-      id: questionId, // id is immutable
-      metadata: newMeta,
-    };
+      kit.questions[qIndex] = {
+        ...kit.questions[qIndex],
+        ...patch,
+        id: questionId, // id is immutable
+        metadata: newMeta,
+      };
 
-    // Re-evaluate coverage and schedule
-    const coverage = checkRequirementCoverage(kit.role.requirements, kit.questions);
-    kit.coverage.uncovered_requirement_ids = coverage.uncoveredRequirementIds;
-    kit.schedule = allocateSchedule(kit.schedule.days_available, kit.questions, kit.role.requirements);
+      // Re-evaluate coverage and schedule
+      const coverage = checkRequirementCoverage(kit.role.requirements, kit.questions);
+      kit.coverage.uncovered_requirement_ids = coverage.uncoveredRequirementIds;
+      kit.schedule = allocateSchedule(kit.schedule.days_available, kit.questions, kit.role.requirements);
 
-    return this.updateKit(kitId, userId, doc.version, kit);
+      return this.updateKit(kitId, userId, doc.version, kit);
+    });
   }
 
   async deleteQuestion(kitId: string, userId: string, questionId: string): Promise<KitDoc> {
-    const doc = await this.getKit(kitId, userId);
-    if (!doc.kit) throw new AppError(400, "KIT_NOT_READY", "Kit has not finished generating");
+    return this.executeWithConflictRetry(async () => {
+      const doc = await this.getKit(kitId, userId);
+      if (!doc.kit) throw new AppError(400, "KIT_NOT_READY", "Kit has not finished generating");
 
-    const kit = doc.kit;
-    const initialLen = kit.questions.length;
-    kit.questions = kit.questions.filter((q) => q.id !== questionId);
+      const kit = doc.kit;
+      const initialLen = kit.questions.length;
+      kit.questions = kit.questions.filter((q) => q.id !== questionId);
 
-    if (kit.questions.length === initialLen) {
-      throw new AppError(404, "QUESTION_NOT_FOUND", `Question '${questionId}' not found`);
-    }
+      if (kit.questions.length === initialLen) {
+        throw new AppError(404, "QUESTION_NOT_FOUND", `Question '${questionId}' not found`);
+      }
 
-    // Re-evaluate coverage and schedule
-    const coverage = checkRequirementCoverage(kit.role.requirements, kit.questions);
-    kit.coverage.uncovered_requirement_ids = coverage.uncoveredRequirementIds;
-    kit.schedule = allocateSchedule(kit.schedule.days_available, kit.questions, kit.role.requirements);
+      // Re-evaluate coverage and schedule
+      const coverage = checkRequirementCoverage(kit.role.requirements, kit.questions);
+      kit.coverage.uncovered_requirement_ids = coverage.uncoveredRequirementIds;
+      kit.schedule = allocateSchedule(kit.schedule.days_available, kit.questions, kit.role.requirements);
 
-    return this.updateKit(kitId, userId, doc.version, kit);
+      return this.updateKit(kitId, userId, doc.version, kit);
+    });
   }
 
   async reorderQuestions(
@@ -385,28 +423,30 @@ export class KitService {
     userId: string,
     orderedQuestionIds: string[]
   ): Promise<KitDoc> {
-    const doc = await this.getKit(kitId, userId);
-    if (!doc.kit) throw new AppError(400, "KIT_NOT_READY", "Kit has not finished generating");
+    return this.executeWithConflictRetry(async () => {
+      const doc = await this.getKit(kitId, userId);
+      if (!doc.kit) throw new AppError(400, "KIT_NOT_READY", "Kit has not finished generating");
 
-    const kit = doc.kit;
-    const questionMap = new Map(kit.questions.map((q) => [q.id, q]));
+      const kit = doc.kit;
+      const questionMap = new Map(kit.questions.map((q) => [q.id, q]));
 
-    const reordered: Question[] = [];
-    for (const id of orderedQuestionIds) {
-      const q = questionMap.get(id);
-      if (q) {
-        reordered.push(q);
-        questionMap.delete(id);
+      const reordered: Question[] = [];
+      for (const id of orderedQuestionIds) {
+        const q = questionMap.get(id);
+        if (q) {
+          reordered.push(q);
+          questionMap.delete(id);
+        }
       }
-    }
 
-    // Append any remaining questions not mentioned in the ordered list
-    for (const remaining of questionMap.values()) {
-      reordered.push(remaining);
-    }
+      // Append any remaining questions not mentioned in the ordered list
+      for (const remaining of questionMap.values()) {
+        reordered.push(remaining);
+      }
 
-    kit.questions = reordered;
-    return this.updateKit(kitId, userId, doc.version, kit);
+      kit.questions = reordered;
+      return this.updateKit(kitId, userId, doc.version, kit);
+    });
   }
 
   // --------------------------------------------------------------------------
@@ -414,25 +454,27 @@ export class KitService {
   // --------------------------------------------------------------------------
 
   async addFlashcard(kitId: string, userId: string, flashcard: Flashcard): Promise<KitDoc> {
-    const doc = await this.getKit(kitId, userId);
-    if (!doc.kit) throw new AppError(400, "KIT_NOT_READY", "Kit has not finished generating");
+    return this.executeWithConflictRetry(async () => {
+      const doc = await this.getKit(kitId, userId);
+      if (!doc.kit) throw new AppError(400, "KIT_NOT_READY", "Kit has not finished generating");
 
-    const kit = doc.kit;
-    if (kit.flashcards.some((f) => f.id === flashcard.id)) {
-      flashcard.id = `f_${Date.now()}`;
-    }
+      const kit = doc.kit;
+      if (kit.flashcards.some((f) => f.id === flashcard.id)) {
+        flashcard.id = `f_${Date.now()}`;
+      }
 
-    flashcard.metadata = {
-      origin: "user",
-      edited: false,
-      pinned: false,
-      state: "active",
-      revision: 1,
-      ...flashcard.metadata,
-    };
+      flashcard.metadata = {
+        origin: "user",
+        edited: false,
+        pinned: false,
+        state: "active",
+        revision: 1,
+        ...flashcard.metadata,
+      };
 
-    kit.flashcards.push(flashcard);
-    return this.updateKit(kitId, userId, doc.version, kit);
+      kit.flashcards.push(flashcard);
+      return this.updateKit(kitId, userId, doc.version, kit);
+    });
   }
 
   async updateFlashcard(
@@ -441,50 +483,54 @@ export class KitService {
     flashcardId: string,
     patch: Partial<Flashcard>
   ): Promise<KitDoc> {
-    const doc = await this.getKit(kitId, userId);
-    if (!doc.kit) throw new AppError(400, "KIT_NOT_READY", "Kit has not finished generating");
+    return this.executeWithConflictRetry(async () => {
+      const doc = await this.getKit(kitId, userId);
+      if (!doc.kit) throw new AppError(400, "KIT_NOT_READY", "Kit has not finished generating");
 
-    const kit = doc.kit;
-    const fIndex = kit.flashcards.findIndex((f) => f.id === flashcardId);
-    if (fIndex === -1) {
-      throw new AppError(404, "FLASHCARD_NOT_FOUND", `Flashcard '${flashcardId}' not found`);
-    }
+      const kit = doc.kit;
+      const fIndex = kit.flashcards.findIndex((f) => f.id === flashcardId);
+      if (fIndex === -1) {
+        throw new AppError(404, "FLASHCARD_NOT_FOUND", `Flashcard '${flashcardId}' not found`);
+      }
 
-    const currentMeta = kit.flashcards[fIndex].metadata || {
-      origin: "generated",
-      edited: false,
-      pinned: false,
-      state: "active",
-      revision: 0,
-    };
+      const currentMeta = kit.flashcards[fIndex].metadata || {
+        origin: "generated",
+        edited: false,
+        pinned: false,
+        state: "active",
+        revision: 0,
+      };
 
-    const newMeta = {
-      ...currentMeta,
-      origin: "user" as const,
-      edited: true,
-      editedAt: new Date().toISOString(),
-      pinned:
-        patch.metadata?.pinned !== undefined ? patch.metadata.pinned : currentMeta.pinned ?? false,
-      state: currentMeta.state || "active",
-      revision: (currentMeta.revision || 0) + 1,
-    };
+      const newMeta = {
+        ...currentMeta,
+        origin: "user" as const,
+        edited: true,
+        editedAt: new Date().toISOString(),
+        pinned:
+          patch.metadata?.pinned !== undefined ? patch.metadata.pinned : currentMeta.pinned ?? false,
+        state: currentMeta.state || "active",
+        revision: (currentMeta.revision || 0) + 1,
+      };
 
-    kit.flashcards[fIndex] = {
-      ...kit.flashcards[fIndex],
-      ...patch,
-      id: flashcardId,
-      metadata: newMeta,
-    };
-    return this.updateKit(kitId, userId, doc.version, kit);
+      kit.flashcards[fIndex] = {
+        ...kit.flashcards[fIndex],
+        ...patch,
+        id: flashcardId,
+        metadata: newMeta,
+      };
+      return this.updateKit(kitId, userId, doc.version, kit);
+    });
   }
 
   async deleteFlashcard(kitId: string, userId: string, flashcardId: string): Promise<KitDoc> {
-    const doc = await this.getKit(kitId, userId);
-    if (!doc.kit) throw new AppError(400, "KIT_NOT_READY", "Kit has not finished generating");
+    return this.executeWithConflictRetry(async () => {
+      const doc = await this.getKit(kitId, userId);
+      if (!doc.kit) throw new AppError(400, "KIT_NOT_READY", "Kit has not finished generating");
 
-    const kit = doc.kit;
-    kit.flashcards = kit.flashcards.filter((f) => f.id !== flashcardId);
-    return this.updateKit(kitId, userId, doc.version, kit);
+      const kit = doc.kit;
+      kit.flashcards = kit.flashcards.filter((f) => f.id !== flashcardId);
+      return this.updateKit(kitId, userId, doc.version, kit);
+    });
   }
 
   // --------------------------------------------------------------------------
