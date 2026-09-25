@@ -83,3 +83,50 @@ export async function apiClient<T>(
 
   return (await res.text()) as unknown as T;
 }
+
+export interface KitGenerationStatusDto {
+  id: string;
+  status: "queued" | "running" | "completed" | "failed" | "cancelled";
+  stage: string;
+  progress: number;
+  message?: string;
+  error?: { code: string; message: string; details?: unknown } | null;
+  generation?: {
+    status?: "queued" | "running" | "completed" | "failed" | "cancelled";
+    stage: string;
+    progress: number;
+    message?: string;
+    error?: { code: string; message: string; details?: unknown } | null;
+  };
+  updatedAt: string;
+}
+
+/**
+ * Resiliently fetches generation status.
+ * Checks /kits/:kitId/generation (universally supported across currently running and newly deployed backend instances),
+ * with transparent fallback to /kits/:kitId/generation-status if needed.
+ */
+export async function fetchKitGenerationStatus(kitId: string): Promise<KitGenerationStatusDto> {
+  let res: any;
+  try {
+    res = await apiClient<any>(`/kits/${kitId}/generation`);
+  } catch (err: unknown) {
+    if (err instanceof ApiError && err.statusCode === 404) {
+      res = await apiClient<any>(`/kits/${kitId}/generation-status`);
+    } else {
+      throw err;
+    }
+  }
+
+  return {
+    id: res.id || kitId,
+    status: res.status,
+    stage: res.stage || res.generation?.stage || "starting",
+    progress: res.progress ?? res.generation?.progress ?? 0,
+    message: res.message || res.generation?.message || "",
+    error: res.error || res.generation?.error || null,
+    generation: res.generation,
+    updatedAt: res.updatedAt || new Date().toISOString(),
+  };
+}
+

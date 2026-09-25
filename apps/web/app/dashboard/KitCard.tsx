@@ -3,7 +3,7 @@
 import { useRef, useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
-import { apiClient } from "@/lib/api-client";
+import { apiClient, fetchKitGenerationStatus } from "@/lib/api-client";
 import {
   Calendar,
   Trash2,
@@ -56,7 +56,7 @@ export function KitCard({ kit, isHighlighted, onDelete }: KitCardProps) {
   // Individual lightweight status polling ONLY for active generations
   const { data: statusData } = useQuery<GenerationStatusResponse>({
     queryKey: ["kit-status", kit.id],
-    queryFn: () => apiClient(`/kits/${kit.id}/generation-status`),
+    queryFn: () => fetchKitGenerationStatus(kit.id),
     enabled: isInitiallyActive,
     refetchInterval: (query) => {
       const status = query.state.data?.status || kit.status;

@@ -5,7 +5,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Navbar } from "@/components/navbar";
-import { apiClient, ApiError } from "@/lib/api-client";
+import { apiClient, ApiError, fetchKitGenerationStatus } from "@/lib/api-client";
 import { Loader2, AlertCircle } from "lucide-react";
 import type {
   Kit,
@@ -86,10 +86,10 @@ export default function KitDetailPage({
 
   const pollStartTimeRef = useRef<number>(Date.now());
 
-  // 1. Lightweight Status Query: Polls /generation-status during active generation
+  // 1. Lightweight Status Query: Polls status during active generation (resilient across endpoint variations)
   const statusQuery = useQuery<GenerationStatusResponse>({
     queryKey: ["kit-status", kitId],
-    queryFn: () => apiClient(`/kits/${kitId}/generation-status`),
+    queryFn: () => fetchKitGenerationStatus(kitId),
     refetchInterval: (query) => {
       const status = query.state.data?.status;
       // Stop immediately on terminal states
