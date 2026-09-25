@@ -83,6 +83,9 @@ export class KitRepository {
     kitId: string | ObjectId,
     userId: string | ObjectId
   ): Promise<KitDoc | null> {
+    if (!ObjectId.isValid(kitId) || !ObjectId.isValid(userId)) {
+      return null;
+    }
     const kitObjId = typeof kitId === "string" ? new ObjectId(kitId) : kitId;
     const userObjId = typeof userId === "string" ? new ObjectId(userId) : userId;
     return this.collection.findOne({ _id: kitObjId, userId: userObjId });
@@ -96,6 +99,9 @@ export class KitRepository {
     kitId: string | ObjectId,
     userId: string | ObjectId
   ): Promise<Pick<KitDoc, "_id" | "status" | "generation" | "updatedAt"> | null> {
+    if (!ObjectId.isValid(kitId) || !ObjectId.isValid(userId)) {
+      return null;
+    }
     const kitObjId = typeof kitId === "string" ? new ObjectId(kitId) : kitId;
     const userObjId = typeof userId === "string" ? new ObjectId(userId) : userId;
     return this.collection.findOne(
@@ -111,11 +117,17 @@ export class KitRepository {
   }
 
   async findById(kitId: string | ObjectId): Promise<KitDoc | null> {
+    if (!ObjectId.isValid(kitId)) {
+      return null;
+    }
     const kitObjId = typeof kitId === "string" ? new ObjectId(kitId) : kitId;
     return this.collection.findOne({ _id: kitObjId });
   }
 
   async findByUserId(userId: string | ObjectId): Promise<KitDoc[]> {
+    if (!ObjectId.isValid(userId)) {
+      return [];
+    }
     const userObjId = typeof userId === "string" ? new ObjectId(userId) : userId;
     return this.collection
       .find({ userId: userObjId })
@@ -215,6 +227,9 @@ export class KitRepository {
     expectedVersion: number,
     updatedKit: Kit
   ): Promise<KitDoc | null> {
+    if (!ObjectId.isValid(kitId) || !ObjectId.isValid(userId)) {
+      return null;
+    }
     const kitObjId = typeof kitId === "string" ? new ObjectId(kitId) : kitId;
     const userObjId = typeof userId === "string" ? new ObjectId(userId) : userId;
     const now = new Date();
@@ -242,6 +257,9 @@ export class KitRepository {
     kitId: string | ObjectId,
     userId: string | ObjectId
   ): Promise<boolean> {
+    if (!ObjectId.isValid(kitId) || !ObjectId.isValid(userId)) {
+      return false;
+    }
     const kitObjId = typeof kitId === "string" ? new ObjectId(kitId) : kitId;
     const userObjId = typeof userId === "string" ? new ObjectId(userId) : userId;
     const result = await this.collection.deleteOne({

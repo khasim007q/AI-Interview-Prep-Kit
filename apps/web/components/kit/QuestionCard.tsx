@@ -56,6 +56,7 @@ export function QuestionCard({
   const [isEditing, setIsEditing] = useState(false);
   const [promptText, setPromptText] = useState(question.prompt);
   const [outlineText, setOutlineText] = useState(question.answer_outline);
+  const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved">("idle");
 
   const isPinned = !!question.metadata?.pinned;
   const isEdited = !!question.metadata?.edited;
@@ -63,11 +64,14 @@ export function QuestionCard({
 
   const handleSaveEdit = () => {
     if (!promptText.trim() || !outlineText.trim()) return;
+    setSaveStatus("saving");
     onUpdate(question.id, {
       prompt: promptText.trim(),
       answer_outline: outlineText.trim(),
     });
     setIsEditing(false);
+    setSaveStatus("saved");
+    setTimeout(() => setSaveStatus("idle"), 2500);
   };
 
   const handleCancelEdit = () => {
@@ -162,6 +166,16 @@ export function QuestionCard({
             {isUserCreated && (
               <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700 border border-emerald-200">
                 User created
+              </span>
+            )}
+            {saveStatus === "saving" && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">
+                Saving...
+              </span>
+            )}
+            {saveStatus === "saved" && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700 border border-emerald-200">
+                Saved
               </span>
             )}
           </div>

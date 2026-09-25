@@ -40,6 +40,7 @@ export function FlashcardBank({
 }: FlashcardBankProps) {
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [editingCardId, setEditingCardId] = useState<string | null>(null);
+  const [savedCardId, setSavedCardId] = useState<string | null>(null);
   const [editFront, setEditFront] = useState("");
   const [editBack, setEditBack] = useState("");
 
@@ -56,6 +57,8 @@ export function FlashcardBank({
       back: editBack.trim(),
     });
     setEditingCardId(null);
+    setSavedCardId(cardId);
+    setTimeout(() => setSavedCardId(null), 2500);
   };
 
   return (
@@ -186,7 +189,12 @@ export function FlashcardBank({
                         #{idx + 1}
                       </span>
                       <div className="flex items-center gap-1">
-                        {card.metadata?.edited && (
+                        {savedCardId === card.id && (
+                          <span className="text-[10px] text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded font-medium border border-emerald-200">
+                            Saved
+                          </span>
+                        )}
+                        {card.metadata?.edited && savedCardId !== card.id && (
                           <span className="text-[10px] text-indigo-700 bg-indigo-50 px-1.5 py-0.5 rounded font-medium border border-indigo-100">
                             Edited
                           </span>

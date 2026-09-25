@@ -40,7 +40,7 @@ export default function NewKitPage() {
         }),
       });
 
-      router.push(`/kits/${response.id}`);
+      router.push(`/dashboard?highlight=${response.id}`);
     } catch (err: unknown) {
       if (err instanceof ApiError) {
         setError(err.message);

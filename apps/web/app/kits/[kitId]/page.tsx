@@ -127,14 +127,24 @@ export default function KitDetailPage({
     };
   }, [statusQuery]);
 
-  const isCompleted = statusQuery.data?.status === "completed";
+  const isStatusCompleted = statusQuery.data?.status === "completed";
+  const isStatusError = Boolean(statusQuery.error);
 
-  // 2. Full Kit Query: Only fetches full representation ONCE generation has completed
-  const { data, isLoading: isKitLoading, error: kitError, refetch } = useQuery<KitResponse>({
+  // 2. Full Kit Query: Only fetches full representation ONCE generation has completed OR as fallback
+  const {
+    data,
+    isLoading: isKitLoading,
+    error: kitError,
+    refetch: refetchKit,
+  } = useQuery<KitResponse>({
     queryKey: ["kit", kitId],
     queryFn: () => apiClient(`/kits/${kitId}`),
-    enabled: isCompleted,
+    enabled: isStatusCompleted || isStatusError,
     staleTime: 30000,
+    retry: (failureCount, err) => {
+      if ((err as ApiError)?.statusCode === 404) return false;
+      return failureCount < 2;
+    },
   });
 
   // Query Practice Summary
@@ -143,7 +153,7 @@ export default function KitDetailPage({
   }>({
     queryKey: ["practice-summary", kitId],
     queryFn: () => apiClient(`/kits/${kitId}/practice/summary`),
-    enabled: isCompleted && !!data?.kit,
+    enabled: isStatusCompleted && !!data?.kit,
   });
 
   const handleMutationError = (err: unknown) => {
@@ -156,7 +166,7 @@ export default function KitDetailPage({
     }
   };
 
-  // --- Mutations ---
+  // --- Optimistic Mutations ---
 
   const addQuestionMutation = useMutation({
     mutationFn: (newQuestion: Question) =>
@@ -164,11 +174,31 @@ export default function KitDetailPage({
         method: "POST",
         body: JSON.stringify(newQuestion),
       }),
+    onMutate: async (newQuestion: Question) => {
+      setMutationError(null);
+      await queryClient.cancelQueries({ queryKey: ["kit", kitId] });
+      const previousData = queryClient.getQueryData<KitResponse>(["kit", kitId]);
+
+      if (previousData?.kit) {
+        queryClient.setQueryData<KitResponse>(["kit", kitId], {
+          ...previousData,
+          kit: {
+            ...previousData.kit,
+            questions: [...previousData.kit.questions, newQuestion],
+          },
+        });
+      }
+      return { previousData };
+    },
+    onError: (err, _vars, context) => {
+      if (context?.previousData) {
+        queryClient.setQueryData(["kit", kitId], context.previousData);
+      }
+      handleMutationError(err);
+    },
     onSuccess: () => {
       setMutationError(null);
-      queryClient.invalidateQueries({ queryKey: ["kit", kitId] });
     },
-    onError: handleMutationError,
   });
 
   const updateQuestionMutation = useMutation({
@@ -183,11 +213,33 @@ export default function KitDetailPage({
         method: "PATCH",
         body: JSON.stringify(patch),
       }),
+    onMutate: async ({ questionId, patch }) => {
+      setMutationError(null);
+      await queryClient.cancelQueries({ queryKey: ["kit", kitId] });
+      const previousData = queryClient.getQueryData<KitResponse>(["kit", kitId]);
+
+      if (previousData?.kit) {
+        queryClient.setQueryData<KitResponse>(["kit", kitId], {
+          ...previousData,
+          kit: {
+            ...previousData.kit,
+            questions: previousData.kit.questions.map((q) =>
+              q.id === questionId ? { ...q, ...patch } : q
+            ),
+          },
+        });
+      }
+      return { previousData };
+    },
+    onError: (err, _vars, context) => {
+      if (context?.previousData) {
+        queryClient.setQueryData(["kit", kitId], context.previousData);
+      }
+      handleMutationError(err);
+    },
     onSuccess: () => {
       setMutationError(null);
-      queryClient.invalidateQueries({ queryKey: ["kit", kitId] });
     },
-    onError: handleMutationError,
   });
 
   const deleteQuestionMutation = useMutation({
@@ -195,11 +247,31 @@ export default function KitDetailPage({
       apiClient(`/kits/${kitId}/questions/${questionId}`, {
         method: "DELETE",
       }),
+    onMutate: async (questionId: string) => {
+      setMutationError(null);
+      await queryClient.cancelQueries({ queryKey: ["kit", kitId] });
+      const previousData = queryClient.getQueryData<KitResponse>(["kit", kitId]);
+
+      if (previousData?.kit) {
+        queryClient.setQueryData<KitResponse>(["kit", kitId], {
+          ...previousData,
+          kit: {
+            ...previousData.kit,
+            questions: previousData.kit.questions.filter((q) => q.id !== questionId),
+          },
+        });
+      }
+      return { previousData };
+    },
+    onError: (err, _vars, context) => {
+      if (context?.previousData) {
+        queryClient.setQueryData(["kit", kitId], context.previousData);
+      }
+      handleMutationError(err);
+    },
     onSuccess: () => {
       setMutationError(null);
-      queryClient.invalidateQueries({ queryKey: ["kit", kitId] });
     },
-    onError: handleMutationError,
   });
 
   const reorderQuestionsMutation = useMutation({
@@ -208,11 +280,38 @@ export default function KitDetailPage({
         method: "PATCH",
         body: JSON.stringify({ questionIds }),
       }),
+    onMutate: async (questionIds: string[]) => {
+      setMutationError(null);
+      await queryClient.cancelQueries({ queryKey: ["kit", kitId] });
+      const previousData = queryClient.getQueryData<KitResponse>(["kit", kitId]);
+
+      if (previousData?.kit) {
+        const orderMap = new Map(questionIds.map((id, index) => [id, index]));
+        const sorted = [...previousData.kit.questions].sort((a, b) => {
+          const idxA = orderMap.has(a.id) ? orderMap.get(a.id)! : 9999;
+          const idxB = orderMap.has(b.id) ? orderMap.get(b.id)! : 9999;
+          return idxA - idxB;
+        });
+
+        queryClient.setQueryData<KitResponse>(["kit", kitId], {
+          ...previousData,
+          kit: {
+            ...previousData.kit,
+            questions: sorted,
+          },
+        });
+      }
+      return { previousData };
+    },
+    onError: (err, _vars, context) => {
+      if (context?.previousData) {
+        queryClient.setQueryData(["kit", kitId], context.previousData);
+      }
+      handleMutationError(err);
+    },
     onSuccess: () => {
       setMutationError(null);
-      queryClient.invalidateQueries({ queryKey: ["kit", kitId] });
     },
-    onError: handleMutationError,
   });
 
   const addFlashcardMutation = useMutation({
@@ -221,11 +320,31 @@ export default function KitDetailPage({
         method: "POST",
         body: JSON.stringify(newCard),
       }),
+    onMutate: async (newCard: Flashcard) => {
+      setMutationError(null);
+      await queryClient.cancelQueries({ queryKey: ["kit", kitId] });
+      const previousData = queryClient.getQueryData<KitResponse>(["kit", kitId]);
+
+      if (previousData?.kit) {
+        queryClient.setQueryData<KitResponse>(["kit", kitId], {
+          ...previousData,
+          kit: {
+            ...previousData.kit,
+            flashcards: [...previousData.kit.flashcards, newCard],
+          },
+        });
+      }
+      return { previousData };
+    },
+    onError: (err, _vars, context) => {
+      if (context?.previousData) {
+        queryClient.setQueryData(["kit", kitId], context.previousData);
+      }
+      handleMutationError(err);
+    },
     onSuccess: () => {
       setMutationError(null);
-      queryClient.invalidateQueries({ queryKey: ["kit", kitId] });
     },
-    onError: handleMutationError,
   });
 
   const updateFlashcardMutation = useMutation({
@@ -240,11 +359,33 @@ export default function KitDetailPage({
         method: "PATCH",
         body: JSON.stringify(patch),
       }),
+    onMutate: async ({ flashcardId, patch }) => {
+      setMutationError(null);
+      await queryClient.cancelQueries({ queryKey: ["kit", kitId] });
+      const previousData = queryClient.getQueryData<KitResponse>(["kit", kitId]);
+
+      if (previousData?.kit) {
+        queryClient.setQueryData<KitResponse>(["kit", kitId], {
+          ...previousData,
+          kit: {
+            ...previousData.kit,
+            flashcards: previousData.kit.flashcards.map((f) =>
+              f.id === flashcardId ? { ...f, ...patch } : f
+            ),
+          },
+        });
+      }
+      return { previousData };
+    },
+    onError: (err, _vars, context) => {
+      if (context?.previousData) {
+        queryClient.setQueryData(["kit", kitId], context.previousData);
+      }
+      handleMutationError(err);
+    },
     onSuccess: () => {
       setMutationError(null);
-      queryClient.invalidateQueries({ queryKey: ["kit", kitId] });
     },
-    onError: handleMutationError,
   });
 
   const deleteFlashcardMutation = useMutation({
@@ -252,11 +393,31 @@ export default function KitDetailPage({
       apiClient(`/kits/${kitId}/flashcards/${flashcardId}`, {
         method: "DELETE",
       }),
+    onMutate: async (flashcardId: string) => {
+      setMutationError(null);
+      await queryClient.cancelQueries({ queryKey: ["kit", kitId] });
+      const previousData = queryClient.getQueryData<KitResponse>(["kit", kitId]);
+
+      if (previousData?.kit) {
+        queryClient.setQueryData<KitResponse>(["kit", kitId], {
+          ...previousData,
+          kit: {
+            ...previousData.kit,
+            flashcards: previousData.kit.flashcards.filter((f) => f.id !== flashcardId),
+          },
+        });
+      }
+      return { previousData };
+    },
+    onError: (err, _vars, context) => {
+      if (context?.previousData) {
+        queryClient.setQueryData(["kit", kitId], context.previousData);
+      }
+      handleMutationError(err);
+    },
     onSuccess: () => {
       setMutationError(null);
-      queryClient.invalidateQueries({ queryKey: ["kit", kitId] });
     },
-    onError: handleMutationError,
   });
 
   const regenerateCategoryMutation = useMutation({
@@ -354,8 +515,8 @@ export default function KitDetailPage({
     }
   };
 
-  // Initial loading state while querying status or loading completed kit
-  if (statusQuery.isLoading || (isCompleted && isKitLoading)) {
+  // 1. Initial loading state while querying status
+  if (statusQuery.isLoading) {
     return (
       <div className="min-h-screen bg-slate-50 flex flex-col">
         <Navbar />
@@ -366,48 +527,20 @@ export default function KitDetailPage({
     );
   }
 
-  // Not found or query error
-  if (statusQuery.error || (isCompleted && (kitError || !data?.kit))) {
-    return (
-      <div className="min-h-screen bg-slate-50 flex flex-col">
-        <Navbar />
-        <div className="mx-auto max-w-md my-auto p-6 bg-white rounded-2xl border border-red-200 shadow-sm text-center">
-          <AlertCircle className="h-10 w-10 text-red-500 mx-auto mb-3" />
-          <h2 className="text-lg font-bold text-slate-900">Kit Not Found</h2>
-          <p className="text-sm text-slate-600 mt-1">
-            This prep kit could not be loaded or you may not have permission to view it.
-          </p>
-          <Link
-            href="/dashboard"
-            className="mt-5 inline-block rounded-lg bg-indigo-600 px-4 py-2 text-xs font-semibold text-white"
-          >
-            Return to Dashboard
-          </Link>
-        </div>
-      </div>
-    );
-  }
-
-  const currentStatus = statusQuery.data?.status;
-
-  // Generation In-Progress, Failed, or Cancelled (served from lightweight status query)
-  if (
-    currentStatus === "running" ||
-    currentStatus === "queued" ||
-    currentStatus === "failed" ||
-    currentStatus === "cancelled"
-  ) {
-    const genMeta = statusQuery.data?.generation || {
-      stage: statusQuery.data?.stage || "starting",
-      progress: statusQuery.data?.progress ?? 5,
-      message: statusQuery.data?.message,
-      error: statusQuery.data?.error,
+  // 2. Active generation (running or queued) served from lightweight status query
+  const statusData = statusQuery.data;
+  if (statusData && (statusData.status === "running" || statusData.status === "queued")) {
+    const genMeta = statusData.generation || {
+      stage: statusData.stage || "starting",
+      progress: statusData.progress ?? 5,
+      message: statusData.message,
+      error: statusData.error,
     };
     return (
       <div className="min-h-screen bg-slate-50 flex flex-col">
         <Navbar />
         <GenerationProgressView
-          status={currentStatus}
+          status={statusData.status}
           generation={genMeta}
           onRetry={() => router.push("/kits/new")}
         />
@@ -415,7 +548,185 @@ export default function KitDetailPage({
     );
   }
 
-  const kit = data!.kit!;
+  // 3. Failed or cancelled state served from lightweight status query
+  if (statusData && (statusData.status === "failed" || statusData.status === "cancelled")) {
+    const genMeta = statusData.generation || {
+      stage: statusData.stage || "failed",
+      progress: statusData.progress ?? 0,
+      message: statusData.message,
+      error: statusData.error,
+    };
+    return (
+      <div className="min-h-screen bg-slate-50 flex flex-col">
+        <Navbar />
+        <GenerationProgressView
+          status={statusData.status}
+          generation={genMeta}
+          onRetry={() => router.push("/kits/new")}
+        />
+      </div>
+    );
+  }
+
+  // 4. Fallback when statusQuery fails: use full kit query to determine existence
+  if (isStatusError) {
+    if (isKitLoading) {
+      return (
+        <div className="min-h-screen bg-slate-50 flex flex-col">
+          <Navbar />
+          <div className="flex-1 flex items-center justify-center">
+            <Loader2 className="h-10 w-10 animate-spin text-indigo-600" />
+          </div>
+        </div>
+      );
+    }
+
+    if (kitError) {
+      const is404 = (kitError as ApiError)?.statusCode === 404;
+      if (is404) {
+        return (
+          <div className="min-h-screen bg-slate-50 flex flex-col">
+            <Navbar />
+            <div className="mx-auto max-w-md my-auto p-6 bg-white rounded-2xl border border-red-200 shadow-sm text-center">
+              <AlertCircle className="h-10 w-10 text-red-500 mx-auto mb-3" />
+              <h2 className="text-lg font-bold text-slate-900">Kit Not Found</h2>
+              <p className="text-sm text-slate-600 mt-1">
+                This prep kit could not be loaded or you may not have permission to view it.
+              </p>
+              <Link
+                href="/dashboard"
+                className="mt-5 inline-block rounded-lg bg-indigo-600 px-4 py-2 text-xs font-semibold text-white"
+              >
+                Return to Dashboard
+              </Link>
+            </div>
+          </div>
+        );
+      }
+
+      return (
+        <div className="min-h-screen bg-slate-50 flex flex-col">
+          <Navbar />
+          <div className="mx-auto max-w-md my-auto p-6 bg-white rounded-2xl border border-slate-200 shadow-sm text-center">
+            <AlertCircle className="h-10 w-10 text-amber-500 mx-auto mb-3" />
+            <h2 className="text-lg font-bold text-slate-900">Connection Error</h2>
+            <p className="text-sm text-slate-600 mt-1">
+              Unable to reach the server. Please check your connection and try again.
+            </p>
+            <button
+              onClick={() => {
+                statusQuery.refetch();
+                refetchKit();
+              }}
+              className="mt-5 inline-block rounded-lg bg-indigo-600 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-500"
+            >
+              Retry
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    if (data) {
+      if (
+        data.status === "running" ||
+        data.status === "queued" ||
+        data.status === "failed" ||
+        data.status === "cancelled"
+      ) {
+        return (
+          <div className="min-h-screen bg-slate-50 flex flex-col">
+            <Navbar />
+            <GenerationProgressView
+              status={data.status}
+              generation={data.generation}
+              onRetry={() => router.push("/kits/new")}
+            />
+          </div>
+        );
+      }
+
+      if (!data.kit) {
+        return (
+          <div className="min-h-screen bg-slate-50 flex flex-col">
+            <Navbar />
+            <div className="mx-auto max-w-md my-auto p-6 bg-white rounded-2xl border border-amber-200 shadow-sm text-center">
+              <AlertCircle className="h-10 w-10 text-amber-500 mx-auto mb-3" />
+              <h2 className="text-lg font-bold text-slate-900">
+                Generation status temporarily unavailable
+              </h2>
+              <p className="text-sm text-slate-600 mt-1">
+                The kit exists, but live status could not be fetched.
+              </p>
+              <button
+                onClick={() => {
+                  statusQuery.refetch();
+                  refetchKit();
+                }}
+                className="mt-5 inline-block rounded-lg bg-indigo-600 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-500"
+              >
+                Retry
+              </button>
+            </div>
+          </div>
+        );
+      }
+    }
+  }
+
+  // 5. Completed kit loading state
+  if (isStatusCompleted && isKitLoading) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex flex-col">
+        <Navbar />
+        <div className="flex-1 flex items-center justify-center">
+          <Loader2 className="h-10 w-10 animate-spin text-indigo-600" />
+        </div>
+      </div>
+    );
+  }
+
+  if (isStatusCompleted && (kitError || !data?.kit)) {
+    const is404 = (kitError as ApiError)?.statusCode === 404;
+    return (
+      <div className="min-h-screen bg-slate-50 flex flex-col">
+        <Navbar />
+        <div className="mx-auto max-w-md my-auto p-6 bg-white rounded-2xl border border-red-200 shadow-sm text-center">
+          <AlertCircle className="h-10 w-10 text-red-500 mx-auto mb-3" />
+          <h2 className="text-lg font-bold text-slate-900">
+            {is404 ? "Kit Not Found" : "Error Loading Kit"}
+          </h2>
+          <p className="text-sm text-slate-600 mt-1">
+            {is404
+              ? "This prep kit could not be loaded or you may not have permission to view it."
+              : "Unable to load completed prep kit. Please try again."}
+          </p>
+          <div className="mt-5 flex items-center justify-center gap-3">
+            <Link
+              href="/dashboard"
+              className="inline-block rounded-lg bg-slate-200 px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-300"
+            >
+              Return to Dashboard
+            </Link>
+            {!is404 && (
+              <button
+                onClick={() => refetchKit()}
+                className="inline-block rounded-lg bg-indigo-600 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-500"
+              >
+                Retry
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!data?.kit) {
+    return null;
+  }
+
+  const kit = data.kit;
 
   const TAB_ITEMS = [
     { id: "overview", label: "Overview & Role" },
@@ -473,7 +784,7 @@ export default function KitDetailPage({
           onClear={() => setMutationError(null)}
           onReload={() => {
             setMutationError(null);
-            refetch();
+            refetchKit();
           }}
         />
 

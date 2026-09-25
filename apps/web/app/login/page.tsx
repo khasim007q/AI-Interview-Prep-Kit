@@ -6,8 +6,12 @@ import Link from "next/link";
 import { apiClient, ApiError } from "@/lib/api-client";
 import { Sparkles, ArrowRight, Loader2 } from "lucide-react";
 
+import { useAuth } from "@/lib/use-auth";
+import type { UserResponse } from "@ai-interview-prep/shared";
+
 export default function LoginPage() {
   const router = useRouter();
+  const { setUser } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -19,10 +23,11 @@ export default function LoginPage() {
     setIsLoading(true);
 
     try {
-      await apiClient("/auth/login", {
+      const res = await apiClient<{ user: UserResponse }>("/auth/login", {
         method: "POST",
         body: JSON.stringify({ email, password }),
       });
+      setUser(res.user);
       router.push("/dashboard");
     } catch (err: unknown) {
       if (err instanceof ApiError) {

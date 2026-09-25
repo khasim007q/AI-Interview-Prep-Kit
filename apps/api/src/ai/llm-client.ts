@@ -1,4 +1,4 @@
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { GoogleGenerativeAI, type GenerativeModel } from "@google/generative-ai";
 import { type ZodType } from "zod";
 import { env } from "../config/env.js";
 import { logger } from "../utils/logger.js";
@@ -136,7 +136,10 @@ export function isRetryableError(err: unknown): boolean {
     msg.includes("overloaded") ||
     msg.includes("service unavailable") ||
     msg.includes("econnreset") ||
+    msg.includes("connection reset") ||
     msg.includes("etimedout") ||
+    msg.includes("timed out") ||
+    msg.includes("timeout") ||
     msg.includes("fetch failed") ||
     msg.includes("network")
   );
@@ -280,6 +283,55 @@ export class GeminiProvider implements LLMProvider {
   }
 
   /**
+   * Executes a Gemini generateContent call with a strict per-call timeout.
+   */
+  private async _executeGenerateContent(
+    model: GenerativeModel,
+    prompt: string,
+    context?: GenerationContext
+  ): Promise<string> {
+    const perCallTimeoutMs = env.LLM_PER_CALL_TIMEOUT_MS || 25000;
+    const callAbortController = new AbortController();
+
+    let timedOut = false;
+    const onParentAbort = () => callAbortController.abort();
+
+    if (context?.signal) {
+      if (context.signal.aborted) {
+        callAbortController.abort();
+      } else {
+        context.signal.addEventListener("abort", onParentAbort, { once: true });
+      }
+    }
+
+    const timeoutTimer = setTimeout(() => {
+      timedOut = true;
+      callAbortController.abort();
+    }, perCallTimeoutMs);
+
+    try {
+      const result = await model.generateContent(prompt, {
+        signal: callAbortController.signal,
+      });
+      const text = result.response.text();
+      if (!text) {
+        throw new Error("Empty response received from LLM");
+      }
+      return text;
+    } catch (err: unknown) {
+      if (timedOut) {
+        throw new Error(`LLM provider call timed out after ${perCallTimeoutMs}ms`);
+      }
+      throw err;
+    } finally {
+      clearTimeout(timeoutTimer);
+      if (context?.signal) {
+        context.signal.removeEventListener("abort", onParentAbort);
+      }
+    }
+  }
+
+  /**
    * Attempts LLM generation with bounded retries, Retry-After capping, and single-attempt schema repair.
    */
   private async _tryWithRetries<T>(
@@ -289,7 +341,7 @@ export class GeminiProvider implements LLMProvider {
     isFallback: boolean,
     context?: GenerationContext
   ): Promise<T> {
-    const maxAttempts = env.MAX_ATTEMPTS_PER_MODEL ?? 2;
+    const maxAttempts = Math.min(2, env.MAX_ATTEMPTS_PER_MODEL || 2);
     let attempt = 0;
     let lastError: unknown;
 
@@ -346,15 +398,12 @@ export class GeminiProvider implements LLMProvider {
           "Dispatching Gemini generateContent call"
         );
 
-        const result = await model.generateContent(request.prompt, {
-          signal: context?.signal,
-        });
+        const rawText = await this._executeGenerateContent(
+          model,
+          request.prompt,
+          context
+        );
         const durationMs = Date.now() - startTime;
-        const rawText = result.response.text();
-
-        if (!rawText) {
-          throw new Error("Empty response received from LLM");
-        }
 
         const cleanedJson = cleanJsonOutput(rawText);
         let parsedJson: unknown;
@@ -426,10 +475,11 @@ export class GeminiProvider implements LLMProvider {
         const repairStart = Date.now();
         const repairPrompt = `${request.prompt}\n\nCRITICAL FIX REQUIRED: Your previous output was invalid.\nPrevious response:\n${rawText.slice(0, 1500)}\n\nOutput ONLY valid JSON adhering strictly to the schema without markdown commentary.`;
 
-        const repairResult = await model.generateContent(repairPrompt, {
-          signal: context?.signal,
-        });
-        const repairRaw = repairResult.response.text();
+        const repairRaw = await this._executeGenerateContent(
+          model,
+          repairPrompt,
+          context
+        );
         const repairCleaned = cleanJsonOutput(repairRaw);
         const repairParsed = JSON.parse(repairCleaned);
         const repairValidation = schema.parse(repairParsed);

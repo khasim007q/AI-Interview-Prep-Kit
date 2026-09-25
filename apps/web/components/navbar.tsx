@@ -2,29 +2,16 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState, useEffect } from "react";
-import { apiClient } from "@/lib/api-client";
+import { useAuth } from "@/lib/use-auth";
 import { Sparkles, BookOpen, LogOut, PlusCircle } from "lucide-react";
-import type { UserResponse } from "@ai-interview-prep/shared";
 
 export function Navbar() {
   const router = useRouter();
-  const [user, setUser] = useState<UserResponse | null>(null);
-
-  useEffect(() => {
-    apiClient<{ user: UserResponse }>("/auth/me")
-      .then((res) => setUser(res.user))
-      .catch(() => setUser(null));
-  }, []);
+  const { user, logout } = useAuth();
 
   const handleLogout = async () => {
-    try {
-      await apiClient("/auth/logout", { method: "POST" });
-      setUser(null);
-      router.push("/login");
-    } catch {
-      router.push("/login");
-    }
+    await logout();
+    router.push("/login");
   };
 
   return (
